@@ -1,25 +1,37 @@
-import React, { useState } from 'react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../firebase';
-import { useNavigate } from 'react-router-dom';
-import { Box, TextField, Button, Typography } from '@mui/material';
+import React, { useState } from "react";
+import { createUserWithEmailAndPassword } from "firebase/auth";
+import { doc, setDoc } from "firebase/firestore";
+import { auth, db } from "../firebase";
+import { TextField, Button, Typography, Box } from "@mui/material";
+import { useNavigate } from "react-router-dom";
 
-export default function Login() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+export default function RegisterPlace() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [placeName, setPlaceName] = useState("");
+  const [error, setError] = useState("");
   const navigate = useNavigate();
 
-  const handleLogin = async (e) => {
+  const handleRegister = async (e) => {
     e.preventDefault();
-    setError('');
+    setError("");
+
     try {
-      await signInWithEmailAndPassword(auth, email, password);
-      console.log('Inicio de sesión exitoso');
-      navigate('/dashboard'); // <-- Agrega esta línea para redirigir
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      // Guarda la información del lugar en la colección 'places' de Firestore
+      await setDoc(doc(db, "places", user.uid), {
+        name: placeName,
+        email: user.email,
+        ownerId: user.uid,
+      });
+
+      console.log("Lugar registrado con éxito");
+      navigate("/place-dashboard"); // Redirecciona al nuevo dashboard del lugar
     } catch (error) {
-      console.error('Error al iniciar sesión:', error);
-      setError('Credenciales incorrectas o usuario no registrado.');
+      console.error("Error al registrar el lugar:", error);
+      setError("Error al registrar el lugar. Por favor, revisa los datos.");
     }
   };
 
@@ -52,6 +64,12 @@ export default function Login() {
       flexDirection: "column",
       gap: "15px",
     },
+    input: {
+      padding: "10px",
+      borderRadius: "6px",
+      border: "1px solid #ccc",
+      fontSize: "1rem",
+    },
     button: {
       padding: "12px",
       borderRadius: "8px",
@@ -72,9 +90,16 @@ export default function Login() {
   return (
     <Box style={styles.container}>
       <Typography variant="h5" component="h1" style={styles.title}>
-        Iniciar Sesión
+        Registrar mi Lugar
       </Typography>
-      <form onSubmit={handleLogin} style={styles.form}>
+      <form onSubmit={handleRegister} style={styles.form}>
+        <TextField
+          label="Nombre del Lugar"
+          type="text"
+          value={placeName}
+          onChange={(e) => setPlaceName(e.target.value)}
+          required
+        />
         <TextField
           label="Email"
           type="email"
@@ -91,7 +116,7 @@ export default function Login() {
         />
         {error && <Typography color="error" style={styles.error}>{error}</Typography>}
         <Button variant="contained" type="submit" style={styles.button}>
-          Iniciar Sesión
+          Registrar
         </Button>
       </form>
     </Box>

@@ -8,6 +8,7 @@ import {
   onSnapshot,
   deleteDoc,
   doc,
+  getDoc,
 } from "firebase/firestore";
 import {
   Container,
@@ -24,9 +25,24 @@ import { useNavigate } from "react-router-dom";
 
 export default function UserDashboard({ user }) {
   const [turnos, setTurnos] = useState([]);
+  const [userName, setUserName] = useState("Cargando...");
   const navigate = useNavigate();
 
   useEffect(() => {
+    // Obtener el nombre del usuario desde Firestore
+    const fetchUserName = async () => {
+      const userRef = doc(db, "users", user.uid);
+      const userSnap = await getDoc(userRef);
+      if (userSnap.exists()) {
+        setUserName(userSnap.data().name);
+      } else {
+        setUserName(user.email);
+      }
+    };
+    
+    fetchUserName();
+
+    // Obtener los turnos del usuario
     const q = query(collection(db, "turnos"), where("userId", "==", user.uid));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const turnosData = snapshot.docs.map((doc) => ({
@@ -50,12 +66,12 @@ export default function UserDashboard({ user }) {
   return (
     <Container maxWidth="md" style={{ marginTop: "2rem" }}>
       <Typography variant="h4" gutterBottom>
-        Bienvenido, {user.displayName || user.email}
+        Bienvenido, {userName}
       </Typography>
       <Button variant="outlined" color="error" onClick={handleLogout} style={{ marginBottom: "1rem" }}>
         Cerrar sesión
       </Button>
-      <Button variant="contained" onClick={() => navigate("/reserve")} style={{ marginBottom: "1rem", marginLeft: "1rem" }}>
+      <Button variant="contained" onClick={() => navigate("/reserve-turn")} style={{ marginBottom: "1rem", marginLeft: "1rem" }}>
         Reservar Turno
       </Button>
       <Typography variant="h5" gutterBottom>
@@ -66,9 +82,9 @@ export default function UserDashboard({ user }) {
         {turnos.map((turno) => (
           <ListItem key={turno.id} divider>
             <ListItemText
- primary={`Lugar: ${turno.placeName}`}
-secondary={`Fecha: ${turno.date} Hora: ${turno.time}`}
-/>
+              primary={`Lugar: ${turno.placeName}`}
+              secondary={`Fecha: ${turno.date} Hora: ${turno.time}`}
+            />
             <ListItemSecondaryAction>
               <IconButton edge="end" color="error" onClick={() => handleCancel(turno.id)}>
                 <DeleteIcon />

@@ -1,16 +1,23 @@
+// Importa las funciones que necesitas del SDK
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getAnalytics } from "firebase/analytics";
+import { getAuth } from "firebase/auth"; // <-- Importado para la autenticación
+import { getFirestore } from "firebase/firestore"; // <-- Importado para la base de datos
 
 const firebaseConfig = {
-  apiKey: "AIzaSyC9ZIUZ_yUtB2yZJJ7J3E8n1cQhPqTx0Jk",
+  apiKey: "AIzaSyDRSu_QvAxGF8tdnprkFCu277rMu5l1ByE",
   authDomain: "turnit-a04c7.firebaseapp.com",
   projectId: "turnit-a04c7",
-  storageBucket: "turnit-a04c7.appspot.com",
+  storageBucket: "turnit-a04c7.firebasestorage.app",
   messagingSenderId: "802491077395",
-  appId: "1:802491077395:web:placeholderappid"
+  appId: "1:802491077395:web:6f0b42857330335330c0e6",
+  measurementId: "G-E7TXQPQDNM"
 };
 
+// Inicializa Firebase
 const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-export const db = getFirestore(app);
+const analytics = getAnalytics(app);
+
+
+export const auth = getAuth(app); // <-- Objeto de autenticación exportado
+export const db = getFirestore(app); 
