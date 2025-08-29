@@ -1,148 +1,111 @@
-import React, { useState } from "react";
-import { collection, getDocs, query, where, addDoc } from "firebase/firestore";
+import React, { useState, useEffect } from "react";
+import { collection, query, where, getDocs, doc, updateDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { Typography, Button, TextField } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 
 export default function ReserveTurn({ user }) {
-  const [placeName, setPlaceName] = useState("");
+  const [placeId, setPlaceId] = useState("");
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
+  const [availableTurns, setAvailableTurns] = useState([]);
   const [error, setError] = useState("");
   const navigate = useNavigate();
 
-  const checkAvailability = async () => {
+  // Buscar turnos disponibles según placeId, fecha y hora
+  const searchAvailableTurns = async () => {
+    if (!placeId || !date || !time) return;
     const q = query(
       collection(db, "turnos"),
-      where("placeName", "==", placeName),
+      where("placeId", "==", placeId),
       where("date", "==", date),
-      where("time", "==", time)
+      where("time", "==", time),
+      where("slotsAvailable", ">", 0)
     );
     const snapshot = await getDocs(q);
-    return snapshot.empty;
+    setAvailableTurns(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  useEffect(() => {
+    searchAvailableTurns();
+  }, [placeId, date, time]);
+
+  const handleReserve = async () => {
     setError("");
-    if (!placeName || !date || !time) {
-      setError("Todos los campos son obligatorios");
+
+    if (!placeId || !date || !time) {
+      setError("Completa todos los campos");
       return;
     }
-    const available = await checkAvailability();
-    if (!available) {
-      setError("Este turno ya está reservado");
+
+    if (availableTurns.length === 0) {
+      setError("No hay turnos disponibles para esa fecha y hora");
       return;
     }
 
     try {
-      await addDoc(collection(db, "turnos"), {
-        userId: user.uid,
-        placeName,
-        date,
-        time,
+      const turnoToReserve = availableTurns[0]; // reservar el primero disponible
+      const turnoRef = doc(db, "turnos", turnoToReserve.id);
+
+      await updateDoc(turnoRef, {
+        slotsAvailable: turnoToReserve.slotsAvailable - 1,
+        reservations: turnoToReserve.reservations
+          ? [...turnoToReserve.reservations, user.uid]
+          : [user.uid],
       });
+
+      alert("Turno reservado con éxito!");
       navigate("/dashboard");
     } catch (err) {
-      console.error("Error al guardar el turno:", err);
-      setError("Ocurrió un error al reservar el turno. Intenta nuevamente.");
+      console.error("Error al reservar turno:", err);
+      setError("Ocurrió un error al reservar el turno");
     }
   };
 
-  const styles = {
-    container: {
-      minHeight: "100vh",
-      display: "flex",
-      flexDirection: "column",
-      justifyContent: "center",
-      alignItems: "center",
-      background: "linear-gradient(135deg, #4e54c8, #8f94fb)",
-      color: "#fff",
-      textAlign: "center",
-      fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
-      padding: "20px",
-    },
-    title: {
-      fontSize: "2rem",
-      fontWeight: "bold",
-      marginBottom: "20px",
-    },
-    form: {
-      background: "#fff",
-      padding: "20px",
-      borderRadius: "10px",
-      width: "100%",
-      maxWidth: "350px",
-      color: "#333",
-      display: "flex",
-      flexDirection: "column",
-      gap: "15px",
-    },
-    input: {
-      padding: "10px",
-      borderRadius: "6px",
-      border: "1px solid #ccc",
-      fontSize: "1rem",
-    },
-    button: {
-      padding: "12px",
-      borderRadius: "8px",
-      border: "none",
-      backgroundColor: "#4e54c8",
-      color: "#fff",
-      fontSize: "1rem",
-      fontWeight: "bold",
-      cursor: "pointer",
-      transition: "all 0.3s ease",
-    },
-    error: {
-      color: "red",
-      fontSize: "0.9rem",
-    },
-  };
-
   return (
-    <div style={styles.container}>
-      <h1 style={styles.title}>Reservar Turno</h1>
-      <form style={styles.form} onSubmit={handleSubmit}>
-        <TextField
-          label="Lugar"
-          fullWidth
-          margin="normal"
-          value={placeName}
-          onChange={(e) => setPlaceName(e.target.value)}
-          required
-        />
-        <TextField
-          label="Fecha"
-          type="date"
-          fullWidth
-          margin="normal"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          InputLabelProps={{ shrink: true }}
-          required
-        />
-        <TextField
-          label="Hora"
-          type="time"
-          fullWidth
-          margin="normal"
-          value={time}
-          onChange={(e) => setTime(e.target.value)}
-          InputLabelProps={{ shrink: true }}
-          required
-        />
-        {error && <Typography style={styles.error}>{error}</Typography>}
-        <Button
-          variant="contained"
-          type="submit"
-          fullWidth
-          style={{ ...styles.button, marginTop: "1rem" }}
-        >
-          Reservar
-        </Button>
-      </form>
+    <div style={{ padding: "2rem", maxWidth: "400px", margin: "0 auto" }}>
+      <Typography variant="h4" gutterBottom>Reservar Turno</Typography>
+
+      <TextField
+        label="Place ID"
+        fullWidth
+        margin="normal"
+        value={placeId}
+        onChange={(e) => setPlaceId(e.target.value)}
+        required
+      />
+      <TextField
+        label="Fecha"
+        type="date"
+        fullWidth
+        margin="normal"
+        value={date}
+        onChange={(e) => setDate(e.target.value)}
+        InputLabelProps={{ shrink: true }}
+        required
+      />
+      <TextField
+        label="Hora"
+        type="time"
+        fullWidth
+        margin="normal"
+        value={time}
+        onChange={(e) => setTime(e.target.value)}
+        InputLabelProps={{ shrink: true }}
+        required
+      />
+
+      {error && <Typography color="error" sx={{ mt: 1 }}>{error}</Typography>}
+
+      <Button
+        variant="contained"
+        color="primary"
+        fullWidth
+        sx={{ mt: 2 }}
+        onClick={handleReserve}
+      >
+        Reservar
+      </Button>
     </div>
   );
 }

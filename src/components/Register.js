@@ -22,8 +22,10 @@ export default function Register() {
 
       // Guarda la información del usuario en la colección 'users' de Firestore
       await setDoc(doc(db, "users", user.uid), {
-        name: name,
+        userId: user.uid,
         email: user.email,
+        role: "user",
+        createdAt: new Date(),
       });
 
       console.log("Usuario registrado con éxito");

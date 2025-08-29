@@ -3,26 +3,49 @@ import { Typography, Box, Button, List, ListItem, ListItemText, ListItemSecondar
 import { useNavigate } from 'react-router-dom';
 import { auth, db } from '../firebase';
 import { signOut } from 'firebase/auth';
-import { collection, query, where, onSnapshot, deleteDoc, doc } from "firebase/firestore";
+import { collection, query, where, onSnapshot, deleteDoc, doc, getDoc } from "firebase/firestore";
 import DeleteIcon from "@mui/icons-material/Delete";
 
 export default function PlaceDashboard({ user }) {
   const [publishedTurns, setPublishedTurns] = useState([]);
+  const [placeId, setPlaceId] = useState(null);
   const navigate = useNavigate();
 
+  // Obtener placeId del usuario
   useEffect(() => {
-    if (user) {
-      const q = query(collection(db, "availableTurns"), where("placeId", "==", user.uid));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const turnsData = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-        setPublishedTurns(turnsData);
-      });
-      return () => unsubscribe();
-    }
+    const fetchPlaceId = async () => {
+      if (!user) return;
+
+      try {
+        const userSnap = await getDoc(doc(db, "users", user.uid));
+        if (userSnap.exists()) {
+          const data = userSnap.data();
+          setPlaceId(data.placeId);
+        } else {
+          console.log("No se encontró el documento del usuario");
+        }
+      } catch (error) {
+        console.error("Error al obtener placeId:", error);
+      }
+    };
+    fetchPlaceId();
   }, [user]);
+
+  // Obtener turnos publicados del lugar
+  useEffect(() => {
+    if (!placeId) return;
+
+    const q = query(collection(db, "turnos"), where("placeId", "==", placeId));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const turnsData = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+      setPublishedTurns(turnsData);
+    });
+
+    return () => unsubscribe();
+  }, [placeId]);
 
   const handleLogout = async () => {
     try {
@@ -35,7 +58,7 @@ export default function PlaceDashboard({ user }) {
 
   const handleDeleteTurn = async (turnId) => {
     try {
-      await deleteDoc(doc(db, "availableTurns", turnId));
+      await deleteDoc(doc(db, "turnos", turnId));
       alert("Turno eliminado con éxito.");
     } catch (error) {
       console.error("Error al eliminar el turno:", error);
@@ -45,12 +68,9 @@ export default function PlaceDashboard({ user }) {
 
   return (
     <Box sx={{ p: 3 }}>
-      <Typography variant="h4">
-        Dashboard del Lugar
-      </Typography>
-      <Typography sx={{ mt: 2 }}>
-        ¡Bienvenido, {user.email}!
-      </Typography>
+      <Typography variant="h4">Dashboard del Lugar</Typography>
+      <Typography sx={{ mt: 2 }}>¡Bienvenido, {user.email}!</Typography>
+
       <Button 
         variant="contained" 
         sx={{ mt: 3, mr: 2 }} 
@@ -66,10 +86,8 @@ export default function PlaceDashboard({ user }) {
       >
         Cerrar Sesión
       </Button>
-      
-      <Typography variant="h5" sx={{ mt: 4 }}>
-        Tus Turnos Publicados
-      </Typography>
+
+      <Typography variant="h5" sx={{ mt: 4 }}>Tus Turnos Publicados</Typography>
       <List>
         {publishedTurns.length === 0 ? (
           <Typography>No has publicado ningún turno todavía.</Typography>
