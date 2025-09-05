@@ -5,10 +5,26 @@ import { auth, db } from "../firebase";
 import { TextField, Button, Typography, Box } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 
+// Función para convertir dirección en coordenadas con Nominatim
+async function geocodeAddress(address) {
+  const resp = await fetch(
+    `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`,
+    { headers: { "User-Agent": "TurnIt-App/1.0 (tuemail@ejemplo.com)" } }
+  );
+
+  const data = await resp.json();
+  if (!data || !data[0]) throw new Error("No se pudo geocodificar la dirección");
+  return {
+    lat: parseFloat(data[0].lat),
+    lng: parseFloat(data[0].lon),
+  };
+}
+
 export default function Register() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  const [address, setAddress] = useState("");
   const [error, setError] = useState("");
   const navigate = useNavigate();
 
@@ -20,19 +36,25 @@ export default function Register() {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Guarda la información del usuario en la colección 'users' de Firestore
+      // 1) Geocodificar la dirección
+      const location = await geocodeAddress(address);
+
+      // 2) Guardar datos en Firestore
       await setDoc(doc(db, "users", user.uid), {
         userId: user.uid,
         email: user.email,
+        name,
         role: "user",
+        address,
+        location,
         createdAt: new Date(),
       });
 
       console.log("Usuario registrado con éxito");
-      navigate('/dashboard'); // <-- Esta línea es la que hace la redirección
+      navigate("/dashboard");
     } catch (error) {
       console.error("Error al registrar el usuario:", error);
-      if (error.code === 'auth/email-already-in-use') {
+      if (error.code === "auth/email-already-in-use") {
         setError("El correo electrónico ya está en uso. Por favor, inicia sesión o usa otro correo.");
       } else {
         setError("Error al registrar el usuario. Por favor, revisa los datos.");
@@ -69,23 +91,6 @@ export default function Register() {
       flexDirection: "column",
       gap: "15px",
     },
-    input: {
-      padding: "10px",
-      borderRadius: "6px",
-      border: "1px solid #ccc",
-      fontSize: "1rem",
-    },
-    button: {
-      padding: "12px",
-      borderRadius: "8px",
-      border: "none",
-      backgroundColor: "#4e54c8",
-      color: "#fff",
-      fontSize: "1rem",
-      fontWeight: "bold",
-      cursor: "pointer",
-      transition: "all 0.3s ease",
-    },
     error: {
       color: "red",
       fontSize: "0.9rem",
@@ -106,6 +111,13 @@ export default function Register() {
           required
         />
         <TextField
+          label="Dirección"
+          type="text"
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          required
+        />
+        <TextField
           label="Email"
           type="email"
           value={email}
@@ -120,7 +132,7 @@ export default function Register() {
           required
         />
         {error && <Typography color="error" style={styles.error}>{error}</Typography>}
-        <Button variant="contained" type="submit" style={styles.button}>
+        <Button variant="contained" type="submit">
           Registrar
         </Button>
       </form>

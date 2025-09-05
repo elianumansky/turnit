@@ -16,22 +16,23 @@ export default function PublishTurn({ user }) {
   useEffect(() => {
     const fetchPlaceId = async () => {
       if (!user) {
-        console.log("No hay usuario logueado");
         setLoadingPlace(false);
         return;
       }
 
       try {
-        const userSnap = await getDoc(doc(db, "users", user.uid));
+        const userRef = doc(db, "users", user.uid);
+        const userSnap = await getDoc(userRef);
+
         if (userSnap.exists()) {
           const data = userSnap.data();
-          console.log("Documento usuario:", data);
-          setPlaceId(data.placeId);
+          setPlaceId(data.placeId || user.uid); // fallback: user.uid si no hay placeId
         } else {
-          console.log("No se encontró documento del usuario");
+          setPlaceId(user.uid); // fallback
         }
       } catch (error) {
         console.error("Error al obtener placeId:", error);
+        setPlaceId(user.uid); // fallback
       } finally {
         setLoadingPlace(false);
       }
@@ -41,21 +42,20 @@ export default function PublishTurn({ user }) {
   }, [user]);
 
   const handlePublish = async () => {
-    console.log({ date, time, slots, user, placeId }); // depuración
-
-    if (!date || !time || !user || !placeId || slots < 1) {
+    if (!date || !time || slots < 1) {
       alert("Por favor, completa todos los campos correctamente.");
       return;
     }
 
     try {
-      const newTurnRef = doc(collection(db, "turnos")); // genera un ID único
-      const turnoId = newTurnRef.id;
+      const turnosRef = collection(db, "turnos");
+      const newTurnoRef = doc(turnosRef); // genera un ID único
+      const turnoId = newTurnoRef.id;
 
-      await setDoc(newTurnRef, {
+      await setDoc(newTurnoRef, {
         turnoId,
         userId: user.uid,
-        placeId,
+        placeId, // aseguramos que siempre exista
         date,
         time,
         slotsAvailable: slots,
@@ -76,9 +76,7 @@ export default function PublishTurn({ user }) {
 
   return (
     <Box sx={{ p: 3 }}>
-      <Typography variant="h4" gutterBottom>
-        Publicar Turnos Disponibles
-      </Typography>
+      <Typography variant="h4">Publicar Turnos Disponibles</Typography>
 
       <TextField
         label="Fecha"
@@ -113,7 +111,7 @@ export default function PublishTurn({ user }) {
       <Button
         variant="contained"
         onClick={handlePublish}
-        disabled={!user || !placeId || !date || !time || slots < 1}
+        disabled={!date || !time || slots < 1} // solo bloquear si faltan datos
       >
         Publicar Turno
       </Button>

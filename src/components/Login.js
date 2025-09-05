@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../firebase';
+import { auth, db } from '../firebase';
 import { useNavigate } from 'react-router-dom';
 import { Box, TextField, Button, Typography } from '@mui/material';
+import { doc, getDoc } from 'firebase/firestore';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -13,10 +14,28 @@ export default function Login() {
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
+
     try {
-      await signInWithEmailAndPassword(auth, email, password);
-      console.log('Inicio de sesión exitoso');
-      navigate('/dashboard'); // <-- Agrega esta línea para redirigir
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      // Buscar en Firestore el rol del usuario
+      const userDocRef = doc(db, 'users', user.uid);
+      const userDoc = await getDoc(userDocRef);
+
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        console.log("Usuario logueado:", userData);
+
+        if (userData.role === 'place') {
+          navigate('/place-dashboard');
+        } else {
+          navigate('/dashboard');
+        }
+      } else {
+        console.warn("El documento del usuario no existe en Firestore.");
+        navigate('/dashboard');
+      }
     } catch (error) {
       console.error('Error al iniciar sesión:', error);
       setError('Credenciales incorrectas o usuario no registrado.');

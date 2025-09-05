@@ -17,21 +17,23 @@ export default function PlaceDashboard({ user }) {
       if (!user) return;
 
       try {
-        const userSnap = await getDoc(doc(db, "users", user.uid));
+        const userRef = doc(db, "users", user.uid);
+        const userSnap = await getDoc(userRef);
         if (userSnap.exists()) {
           const data = userSnap.data();
-          setPlaceId(data.placeId);
+          setPlaceId(data.placeId || user.uid); // fallback a user.uid
         } else {
-          console.log("No se encontró el documento del usuario");
+          setPlaceId(user.uid); // fallback
         }
       } catch (error) {
         console.error("Error al obtener placeId:", error);
+        setPlaceId(user.uid); // fallback
       }
     };
     fetchPlaceId();
   }, [user]);
 
-  // Obtener turnos publicados del lugar
+  // Escuchar turnos publicados
   useEffect(() => {
     if (!placeId) return;
 

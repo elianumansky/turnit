@@ -5,22 +5,6 @@ import { auth, db } from "../firebase";
 import { TextField, Button, Typography, Box } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 
-// Función para convertir dirección en coordenadas con Nominatim (OpenStreetMap)
-async function geocodeAddress(address) {
-  const resp = await fetch(
-  `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`,
-  { headers: { "User-Agent": "TurnIt-App/1.0 (tuemail@ejemplo.com)" } }
-);
-
-  const data = await resp.json();
-  if (!data || !data[0]) throw new Error("No se pudo geocodificar la dirección");
-  return {
-    lat: parseFloat(data[0].lat),
-    lng: parseFloat(data[0].lon),
-  };
-}
-
-
 export default function RegisterPlace() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -43,10 +27,7 @@ export default function RegisterPlace() {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // 2) Obtener coordenadas de la dirección
-      const location = await geocodeAddress(address);
-
-      // 3) Crear el documento del lugar en Firestore
+      // 2) Crear el documento del lugar en Firestore
       const placesRef = collection(db, "places");
       const newPlaceRef = doc(placesRef);
       const placeId = newPlaceRef.id;
@@ -56,19 +37,17 @@ export default function RegisterPlace() {
         userId: user.uid,
         name: placeName,
         email: user.email,
-        address,
-        location,
+        address, // dirección manual obligatoria
         createdAt: new Date(),
       });
 
       alert("Lugar registrado con éxito ✅");
       navigate("/place-dashboard");
     } catch (err) {
-          console.error("Error completo:", err);
-          setError(`Error al registrar el lugar: ${err.message}`);
-       }
-
-};
+      console.error("Error al registrar el lugar:", err);
+      setError("Error al registrar el lugar. Revisa los datos e intenta nuevamente.");
+    }
+  };
 
   const styles = {
     container: {
