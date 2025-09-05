@@ -1,56 +1,39 @@
 import React, { useState, useEffect } from "react";
-import { collection, query, where, getDocs, doc, updateDoc } from "firebase/firestore";
+import { collection, getDocs, doc, updateDoc, query, where } from "firebase/firestore";
 import { db } from "../firebase";
-import { Typography, Button, TextField } from "@mui/material";
+import { Typography, Button, Card, CardContent } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 
 export default function ReserveTurn({ user }) {
-  const [placeId, setPlaceId] = useState("");
-  const [date, setDate] = useState("");
-  const [time, setTime] = useState("");
   const [availableTurns, setAvailableTurns] = useState([]);
   const [error, setError] = useState("");
   const navigate = useNavigate();
 
-  // Buscar turnos disponibles según placeId, fecha y hora
-  const searchAvailableTurns = async () => {
-    if (!placeId || !date || !time) return;
-    const q = query(
-      collection(db, "turnos"),
-      where("placeId", "==", placeId),
-      where("date", "==", date),
-      where("time", "==", time),
-      where("slotsAvailable", ">", 0)
-    );
-    const snapshot = await getDocs(q);
-    setAvailableTurns(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-  };
-
+  // Traer todos los turnos disponibles
   useEffect(() => {
-    searchAvailableTurns();
-  }, [placeId, date, time]);
+    const fetchAvailableTurns = async () => {
+      try {
+        const q = query(collection(db, "turnos"), where("slotsAvailable", ">", 0));
+        const snapshot = await getDocs(q);
+        setAvailableTurns(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      } catch (err) {
+        console.error("Error al cargar turnos:", err);
+        setError("No se pudieron cargar los turnos disponibles");
+      }
+    };
 
-  const handleReserve = async () => {
+    fetchAvailableTurns();
+  }, []);
+
+  const handleReserve = async (turno) => {
     setError("");
-
-    if (!placeId || !date || !time) {
-      setError("Completa todos los campos");
-      return;
-    }
-
-    if (availableTurns.length === 0) {
-      setError("No hay turnos disponibles para esa fecha y hora");
-      return;
-    }
-
     try {
-      const turnoToReserve = availableTurns[0]; // reservar el primero disponible
-      const turnoRef = doc(db, "turnos", turnoToReserve.id);
+      const turnoRef = doc(db, "turnos", turno.id);
 
       await updateDoc(turnoRef, {
-        slotsAvailable: turnoToReserve.slotsAvailable - 1,
-        reservations: turnoToReserve.reservations
-          ? [...turnoToReserve.reservations, user.uid]
+        slotsAvailable: turno.slotsAvailable - 1,
+        reservations: turno.reservations
+          ? [...turno.reservations, user.uid]
           : [user.uid],
       });
 
@@ -63,49 +46,33 @@ export default function ReserveTurn({ user }) {
   };
 
   return (
-    <div style={{ padding: "2rem", maxWidth: "400px", margin: "0 auto" }}>
-      <Typography variant="h4" gutterBottom>Reservar Turno</Typography>
+    <div style={{ padding: "2rem", maxWidth: "600px", margin: "0 auto" }}>
+      <Typography variant="h4" gutterBottom>Turnos Disponibles</Typography>
 
-      <TextField
-        label="Place ID"
-        fullWidth
-        margin="normal"
-        value={placeId}
-        onChange={(e) => setPlaceId(e.target.value)}
-        required
-      />
-      <TextField
-        label="Fecha"
-        type="date"
-        fullWidth
-        margin="normal"
-        value={date}
-        onChange={(e) => setDate(e.target.value)}
-        InputLabelProps={{ shrink: true }}
-        required
-      />
-      <TextField
-        label="Hora"
-        type="time"
-        fullWidth
-        margin="normal"
-        value={time}
-        onChange={(e) => setTime(e.target.value)}
-        InputLabelProps={{ shrink: true }}
-        required
-      />
+      {error && <Typography color="error" sx={{ mb: 2 }}>{error}</Typography>}
 
-      {error && <Typography color="error" sx={{ mt: 1 }}>{error}</Typography>}
-
-      <Button
-        variant="contained"
-        color="primary"
-        fullWidth
-        sx={{ mt: 2 }}
-        onClick={handleReserve}
-      >
-        Reservar
-      </Button>
+      {availableTurns.length === 0 ? (
+        <Typography>No hay turnos disponibles</Typography>
+      ) : (
+        availableTurns.map(turno => (
+          <Card key={turno.id} sx={{ mb: 2 }}>
+            <CardContent>
+              <Typography variant="h6">{turno.placeName}</Typography>
+              <Typography>Fecha: {turno.date}</Typography>
+              <Typography>Hora: {turno.time}</Typography>
+              <Typography>Turnos disponibles: {turno.slotsAvailable}</Typography>
+              <Button
+                variant="contained"
+                color="primary"
+                sx={{ mt: 1 }}
+                onClick={() => handleReserve(turno)}
+              >
+                Reservar
+              </Button>
+            </CardContent>
+          </Card>
+        ))
+      )}
     </div>
   );
 }
