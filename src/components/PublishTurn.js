@@ -9,53 +9,51 @@ export default function PublishTurn({ user }) {
   const [time, setTime] = useState("");
   const [slots, setSlots] = useState(1);
   const [placeId, setPlaceId] = useState(null);
+  const [placeName, setPlaceName] = useState("");
   const [loadingPlace, setLoadingPlace] = useState(true);
   const navigate = useNavigate();
 
-  // Obtener placeId del usuario logueado
+  // Obtener placeId y nombre del lugar del usuario logueado
   useEffect(() => {
-    const fetchPlaceId = async () => {
+    const fetchPlace = async () => {
       if (!user) {
         setLoadingPlace(false);
         return;
       }
-
       try {
-        const userRef = doc(db, "users", user.uid);
+        const userRef = doc(db, "places", user.uid);
         const userSnap = await getDoc(userRef);
-
         if (userSnap.exists()) {
           const data = userSnap.data();
-          setPlaceId(data.placeId || user.uid); // fallback: user.uid si no hay placeId
+          setPlaceId(data.placeId);
+          setPlaceName(data.name);
         } else {
-          setPlaceId(user.uid); // fallback
+          console.log("No se encontró documento del lugar");
         }
-      } catch (error) {
-        console.error("Error al obtener placeId:", error);
-        setPlaceId(user.uid); // fallback
+      } catch (err) {
+        console.error("Error al obtener datos del lugar:", err);
       } finally {
         setLoadingPlace(false);
       }
     };
-
-    fetchPlaceId();
+    fetchPlace();
   }, [user]);
 
   const handlePublish = async () => {
-    if (!date || !time || slots < 1) {
+    if (!date || !time || !slots || !placeId) {
       alert("Por favor, completa todos los campos correctamente.");
       return;
     }
 
     try {
       const turnosRef = collection(db, "turnos");
-      const newTurnoRef = doc(turnosRef); // genera un ID único
+      const newTurnoRef = doc(turnosRef);
       const turnoId = newTurnoRef.id;
 
       await setDoc(newTurnoRef, {
         turnoId,
-        userId: user.uid,
-        placeId, // aseguramos que siempre exista
+        placeId,
+        placeName,
         date,
         time,
         slotsAvailable: slots,
@@ -64,15 +62,13 @@ export default function PublishTurn({ user }) {
 
       alert("Turno publicado con éxito!");
       navigate("/place-dashboard");
-    } catch (error) {
-      console.error("Error al publicar el turno:", error);
+    } catch (err) {
+      console.error("Error al publicar turno:", err);
       alert("Hubo un error al publicar el turno.");
     }
   };
 
-  if (loadingPlace) {
-    return <Typography>Cargando lugar...</Typography>;
-  }
+  if (loadingPlace) return <Typography>Cargando datos del lugar...</Typography>;
 
   return (
     <Box sx={{ p: 3 }}>
@@ -111,7 +107,7 @@ export default function PublishTurn({ user }) {
       <Button
         variant="contained"
         onClick={handlePublish}
-        disabled={!date || !time || slots < 1} // solo bloquear si faltan datos
+        disabled={!user || !placeId}
       >
         Publicar Turno
       </Button>

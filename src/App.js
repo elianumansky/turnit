@@ -13,6 +13,8 @@ import ReserveTurn from "./components/ReserveTurn";
 import RegisterPlace from './components/RegisterPlace';
 import PlaceDashboard from "./components/PlaceDashboard";
 import PublishTurn from "./components/PublishTurn"; // <-- Nuevo componente importado
+import PlacesNearby from "./components/PlacesNearby";
+import PlaceDetail from "./components/PlaceDetail";
 
 function App() {
   const [user, setUser] = useState(null);
@@ -53,6 +55,8 @@ function App() {
             <Route path="/place-dashboard" element={<PlaceDashboard user={user} />} />
             <Route path="/publish-turn" element={<PublishTurn user={user} />} /> {/* <-- Nueva ruta para publicar turnos */}
             <Route path="*" element={<Navigate to={isPlace ? "/place-dashboard" : "/dashboard"} />} />
+            <Route path="/lugares" element={<PlacesNearby />} />
+            <Route path="/place/:id" element={<PlaceDetail />} />
           </>
         ) : (
           <Route path="/*" element={<Navigate to="/" />} />

@@ -11,29 +11,28 @@ export default function PlaceDashboard({ user }) {
   const [placeId, setPlaceId] = useState(null);
   const navigate = useNavigate();
 
-  // Obtener placeId del usuario
+  // Obtener placeId del usuario logueado
   useEffect(() => {
     const fetchPlaceId = async () => {
       if (!user) return;
 
       try {
-        const userRef = doc(db, "users", user.uid);
-        const userSnap = await getDoc(userRef);
-        if (userSnap.exists()) {
-          const data = userSnap.data();
-          setPlaceId(data.placeId || user.uid); // fallback a user.uid
+        const placeRef = doc(db, "places", user.uid);
+        const placeSnap = await getDoc(placeRef);
+        if (placeSnap.exists()) {
+          const data = placeSnap.data();
+          setPlaceId(data.placeId);
         } else {
-          setPlaceId(user.uid); // fallback
+          console.log("No se encontró documento del lugar");
         }
-      } catch (error) {
-        console.error("Error al obtener placeId:", error);
-        setPlaceId(user.uid); // fallback
+      } catch (err) {
+        console.error("Error al obtener placeId:", err);
       }
     };
     fetchPlaceId();
   }, [user]);
 
-  // Escuchar turnos publicados
+  // Obtener turnos publicados del lugar
   useEffect(() => {
     if (!placeId) return;
 
@@ -53,8 +52,8 @@ export default function PlaceDashboard({ user }) {
     try {
       await signOut(auth);
       navigate("/");
-    } catch (error) {
-      console.error("Error al cerrar sesión:", error);
+    } catch (err) {
+      console.error("Error al cerrar sesión:", err);
     }
   };
 
@@ -62,9 +61,9 @@ export default function PlaceDashboard({ user }) {
     try {
       await deleteDoc(doc(db, "turnos", turnId));
       alert("Turno eliminado con éxito.");
-    } catch (error) {
-      console.error("Error al eliminar el turno:", error);
-      alert("Hubo un error al eliminar el turno.");
+    } catch (err) {
+      console.error(err);
+      alert("Error al eliminar turno.");
     }
   };
 
@@ -73,18 +72,19 @@ export default function PlaceDashboard({ user }) {
       <Typography variant="h4">Dashboard del Lugar</Typography>
       <Typography sx={{ mt: 2 }}>¡Bienvenido, {user.email}!</Typography>
 
-      <Button 
-        variant="contained" 
-        sx={{ mt: 3, mr: 2 }} 
-        onClick={() => navigate('/publish-turn')}
+      <Button
+        variant="contained"
+        sx={{ mt: 3, mr: 2 }}
+        onClick={() => navigate("/publish-turn")}
       >
         Publicar Turnos
       </Button>
-      <Button 
-        onClick={handleLogout} 
-        variant="contained" 
+
+      <Button
+        variant="contained"
         color="secondary"
         sx={{ mt: 3 }}
+        onClick={handleLogout}
       >
         Cerrar Sesión
       </Button>
