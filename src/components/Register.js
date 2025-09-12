@@ -8,17 +8,23 @@ import bcrypt from "bcryptjs";
 
 // Función para convertir dirección en coordenadas con Nominatim
 async function geocodeAddress(address) {
-  const resp = await fetch(
-    `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`,
-    { headers: { "User-Agent": "TurnIt-App/1.0 (tuemail@ejemplo.com)" } }
-  );
+  try {
+    const resp = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`,
+      { headers: { "User-Agent": "TurnIt-App/1.0 (contacto@turnit.com)" } }
+    );
 
-  const data = await resp.json();
-  if (!data || !data[0]) throw new Error("No se pudo geocodificar la dirección");
-  return {
-    lat: parseFloat(data[0].lat),
-    lng: parseFloat(data[0].lon),
-  };
+    const data = await resp.json();
+    if (!data || !data[0]) throw new Error("No se pudo geocodificar la dirección");
+
+    return {
+      lat: parseFloat(data[0].lat),
+      lng: parseFloat(data[0].lon),
+    };
+  } catch (err) {
+    console.error("Error al geocodificar:", err);
+    return null; // Retornar null si falla geocodificación
+  }
 }
 
 export default function Register() {
@@ -33,22 +39,27 @@ export default function Register() {
     e.preventDefault();
     setError("");
 
+    if (!email || !password || !name || !address) {
+      setError("Por favor completa todos los campos");
+      return;
+    }
+
     try {
-      // 1) Registrar en Firebase Authentication
+      // 1) Crear usuario en Firebase Auth
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // 2) Hashear la contraseña antes de guardarla en Firestore
+      // 2) Hashear la contraseña (opcional si también la quieres en Firestore)
       const hashedPassword = bcrypt.hashSync(password, 10);
 
-      // 3) Geocodificar dirección
+      // 3) Geocodificar la dirección
       const location = await geocodeAddress(address);
 
-      // 4) Guardar datos en Firestore
+      // 4) Guardar datos del usuario en Firestore
       await setDoc(doc(db, "users", user.uid), {
         userId: user.uid,
         email: user.email,
-        password: hashedPassword,   // <--- contraseña segura
+        password: hashedPassword,
         name,
         role: "user",
         address,
@@ -56,14 +67,14 @@ export default function Register() {
         createdAt: new Date(),
       });
 
-      console.log("Usuario registrado con éxito");
+      console.log("Usuario registrado con éxito ✅");
       navigate("/dashboard");
-    } catch (error) {
-      console.error("Error al registrar el usuario:", error);
-      if (error.code === "auth/email-already-in-use") {
-        setError("El correo electrónico ya está en uso. Por favor, inicia sesión o usa otro correo.");
+    } catch (err) {
+      console.error("Error al registrar el usuario:", err);
+      if (err.code === "auth/email-already-in-use") {
+        setError("El correo electrónico ya está registrado.");
       } else {
-        setError("Error al registrar el usuario. Por favor, revisa los datos.");
+        setError("Error al registrar el usuario. Revisa los datos e intenta nuevamente.");
       }
     }
   };
@@ -81,11 +92,7 @@ export default function Register() {
       fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
       padding: "20px",
     },
-    title: {
-      fontSize: "2rem",
-      fontWeight: "bold",
-      marginBottom: "20px",
-    },
+    title: { fontSize: "2rem", fontWeight: "bold", marginBottom: "20px" },
     form: {
       background: "#fff",
       padding: "20px",
@@ -97,10 +104,7 @@ export default function Register() {
       flexDirection: "column",
       gap: "15px",
     },
-    error: {
-      color: "red",
-      fontSize: "0.9rem",
-    },
+    error: { color: "red", fontSize: "0.9rem" },
   };
 
   return (
@@ -137,8 +141,8 @@ export default function Register() {
           onChange={(e) => setPassword(e.target.value)}
           required
         />
-        {error && <Typography color="error" style={styles.error}>{error}</Typography>}
-        <Button variant="contained" type="submit">
+        {error && <Typography style={styles.error}>{error}</Typography>}
+        <Button variant="contained" color="primary" type="submit">
           Registrar
         </Button>
       </form>

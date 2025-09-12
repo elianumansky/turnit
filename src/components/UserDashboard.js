@@ -59,14 +59,15 @@ export default function UserDashboard({ user }) {
   // Función para reservar un turno
   // ------------------------------
   const handleReserve = async (turno) => {
-    setError("");
     try {
       const turnoRef = doc(db, "turnos", turno.id);
+      const currentSlots = turno.slotsAvailable ?? 0;
+
+      if (currentSlots <= 0) return;
+
       await updateDoc(turnoRef, {
-        slotsAvailable: (turno.slotsAvailable || turno.slots) - 1,
-        reservations: turno.reservations
-          ? [...turno.reservations, user.uid]
-          : [user.uid],
+        slotsAvailable: currentSlots - 1,
+        reservations: turno.reservations ? [...turno.reservations, user.uid] : [user.uid],
       });
     } catch (err) {
       console.error("Error al reservar turno:", err);
@@ -78,11 +79,12 @@ export default function UserDashboard({ user }) {
   // Función para cancelar un turno
   // ------------------------------
   const handleCancel = async (turno) => {
-    setError("");
     try {
       const turnoRef = doc(db, "turnos", turno.id);
+      const currentSlots = turno.slotsAvailable ?? 0;
+
       await updateDoc(turnoRef, {
-        slotsAvailable: (turno.slotsAvailable || turno.slots) + 1,
+        slotsAvailable: currentSlots + 1,
         reservations: (turno.reservations || []).filter(uid => uid !== user.uid),
       });
     } catch (err) {
@@ -116,15 +118,18 @@ export default function UserDashboard({ user }) {
                   <Typography variant="h6">{turno.placeName || "—"}</Typography>
                   <Typography>Fecha: {turno.date}</Typography>
                   <Typography>Hora: {turno.time}</Typography>
-                  <Typography>Turnos disponibles: {turno.slotsAvailable || turno.slots}</Typography>
-                  <Button
-                    variant="contained"
-                    color="primary"
-                    sx={{ mt: 1 }}
-                    onClick={() => handleReserve(turno)}
-                  >
-                    Reservar
-                  </Button>
+                  <Typography>Turnos disponibles: {turno.slotsAvailable ?? 0}</Typography>
+                  {!turno.reservations?.includes(user.uid) && (
+                    <Button
+                      variant="contained"
+                      color="primary"
+                      sx={{ mt: 1 }}
+                      onClick={() => handleReserve(turno)}
+                      disabled={turno.slotsAvailable <= 0}
+                    >
+                      Reservar
+                    </Button>
+                  )}
                 </CardContent>
               </Card>
             </Grid>
@@ -147,9 +152,9 @@ export default function UserDashboard({ user }) {
                   <Typography variant="h6">{turno.placeName || "—"}</Typography>
                   <Typography>Fecha: {turno.date}</Typography>
                   <Typography>Hora: {turno.time}</Typography>
-                  <Typography>Turnos disponibles: {turno.slotsAvailable || turno.slots}</Typography>
+                  <Typography>Turnos disponibles: {turno.slotsAvailable ?? 0}</Typography>
                   <Button
-                    variant="outlined"
+                    variant="contained"
                     color="error"
                     sx={{ mt: 1 }}
                     onClick={() => handleCancel(turno)}
