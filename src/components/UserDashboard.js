@@ -18,10 +18,7 @@ export default function UserDashboard({ user }) {
       query(collection(db, "turnos"), where("slotsAvailable", ">", 0)),
       (snapshot) => {
         const turns = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-        // Ordenar por cercanía si existe el campo distance
         turns.sort((a, b) => (a.distance || Infinity) - (b.distance || Infinity));
-
         setAvailableTurns(turns);
         setLoadingAvailable(false);
       },
@@ -62,7 +59,6 @@ export default function UserDashboard({ user }) {
     setError("");
     try {
       const turnoRef = doc(db, "turnos", turno.id);
-
       await updateDoc(turnoRef, {
         slotsAvailable: turno.slotsAvailable - 1,
         reservations: turno.reservations
@@ -72,6 +68,23 @@ export default function UserDashboard({ user }) {
     } catch (err) {
       console.error("Error al reservar turno:", err);
       setError("Ocurrió un error al reservar el turno");
+    }
+  };
+
+  // ------------------------------
+  // Función para cancelar un turno
+  // ------------------------------
+  const handleCancel = async (turno) => {
+    setError("");
+    try {
+      const turnoRef = doc(db, "turnos", turno.id);
+      await updateDoc(turnoRef, {
+        slotsAvailable: turno.slotsAvailable + 1,
+        reservations: turno.reservations.filter(uid => uid !== user.uid),
+      });
+    } catch (err) {
+      console.error("Error al cancelar turno:", err);
+      setError("Ocurrió un error al cancelar el turno");
     }
   };
 
@@ -136,7 +149,15 @@ export default function UserDashboard({ user }) {
                   <Typography>Hora: {turno.time}</Typography>
                   {turno.distance !== undefined && (
                     <Typography>Distancia: {turno.distance.toFixed(2)} km</Typography>
-                  )}                  
+                  )}
+                  <Button
+                    variant="outlined"
+                    color="error"
+                    sx={{ mt: 1 }}
+                    onClick={() => handleCancel(turno)}
+                  >
+                    Cancelar Turno
+                  </Button>
                 </CardContent>
               </Card>
             </Grid>

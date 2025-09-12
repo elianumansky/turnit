@@ -13,7 +13,7 @@ export default function PublishTurn({ user }) {
   const [loadingPlace, setLoadingPlace] = useState(true);
   const navigate = useNavigate();
 
-  // Obtener placeId y nombre del lugar del usuario logueado
+  // Cargar placeId y nombre del lugar
   useEffect(() => {
     const fetchPlace = async () => {
       if (!user) {
@@ -25,10 +25,12 @@ export default function PublishTurn({ user }) {
         const userSnap = await getDoc(userRef);
         if (userSnap.exists()) {
           const data = userSnap.data();
-          setPlaceId(data.placeId);
-          setPlaceName(data.name);
+          setPlaceId(data.placeId || user.uid); // fallback: uid si no hay placeId
+          setPlaceName(data.name || "Mi Lugar");
         } else {
-          console.log("No se encontró documento del lugar");
+          console.log("No se encontró documento del lugar, se usará UID como placeId");
+          setPlaceId(user.uid);
+          setPlaceName("Mi Lugar");
         }
       } catch (err) {
         console.error("Error al obtener datos del lugar:", err);
@@ -40,7 +42,7 @@ export default function PublishTurn({ user }) {
   }, [user]);
 
   const handlePublish = async () => {
-    if (!date || !time || !slots || !placeId) {
+    if (!date || !time || !slots) {
       alert("Por favor, completa todos los campos correctamente.");
       return;
     }
@@ -68,11 +70,16 @@ export default function PublishTurn({ user }) {
     }
   };
 
-  if (loadingPlace) return <Typography>Cargando datos del lugar...</Typography>;
+  if (loadingPlace)
+    return (
+      <Typography sx={{ p: 3 }}>Cargando datos del lugar...</Typography>
+    );
 
   return (
-    <Box sx={{ p: 3 }}>
-      <Typography variant="h4">Publicar Turnos Disponibles</Typography>
+    <Box sx={{ p: 3, maxWidth: 400, mx: "auto" }}>
+      <Typography variant="h4" sx={{ mb: 3, fontWeight: "bold" }}>
+        Publicar Turnos Disponibles
+      </Typography>
 
       <TextField
         label="Fecha"
@@ -80,7 +87,7 @@ export default function PublishTurn({ user }) {
         value={date}
         onChange={(e) => setDate(e.target.value)}
         fullWidth
-        sx={{ mt: 2, mb: 2 }}
+        sx={{ mb: 2 }}
         InputLabelProps={{ shrink: true }}
       />
 
@@ -100,14 +107,24 @@ export default function PublishTurn({ user }) {
         value={slots}
         onChange={(e) => setSlots(Number(e.target.value))}
         fullWidth
-        sx={{ mb: 2 }}
+        sx={{ mb: 3 }}
         inputProps={{ min: 1 }}
       />
 
       <Button
         variant="contained"
+        fullWidth
+        sx={{
+          background: "linear-gradient(135deg, #4e54c8, #8f94fb)",
+          color: "#fff",
+          fontWeight: "bold",
+          py: 1.5,
+          ":hover": {
+            background: "linear-gradient(135deg, #8f94fb, #4e54c8)",
+          },
+        }}
         onClick={handlePublish}
-        disabled={!user || !placeId}
+        disabled={!date || !time || !slots || !placeId}
       >
         Publicar Turno
       </Button>

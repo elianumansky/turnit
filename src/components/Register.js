@@ -4,6 +4,7 @@ import { doc, setDoc } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { TextField, Button, Typography, Box } from "@mui/material";
 import { useNavigate } from "react-router-dom";
+import bcrypt from "bcryptjs";
 
 // Función para convertir dirección en coordenadas con Nominatim
 async function geocodeAddress(address) {
@@ -33,16 +34,21 @@ export default function Register() {
     setError("");
 
     try {
+      // 1) Registrar en Firebase Authentication
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // 1) Geocodificar la dirección
+      // 2) Hashear la contraseña antes de guardarla en Firestore
+      const hashedPassword = bcrypt.hashSync(password, 10);
+
+      // 3) Geocodificar dirección
       const location = await geocodeAddress(address);
 
-      // 2) Guardar datos en Firestore
+      // 4) Guardar datos en Firestore
       await setDoc(doc(db, "users", user.uid), {
         userId: user.uid,
         email: user.email,
+        password: hashedPassword,   // <--- contraseña segura
         name,
         role: "user",
         address,

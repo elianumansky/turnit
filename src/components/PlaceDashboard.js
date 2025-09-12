@@ -1,9 +1,30 @@
 import React, { useEffect, useState } from "react";
-import { Typography, Box, Button, List, ListItem, ListItemText, ListItemSecondaryAction, IconButton } from "@mui/material";
+import {
+  Typography,
+  Box,
+  Button,
+  List,
+  ListItem,
+  ListItemText,
+  ListItemSecondaryAction,
+  IconButton,
+  Grid,
+  Card,
+  CardContent,
+} from "@mui/material";
 import { useNavigate } from 'react-router-dom';
 import { auth, db } from '../firebase';
 import { signOut } from 'firebase/auth';
-import { collection, query, where, onSnapshot, deleteDoc, doc, getDoc } from "firebase/firestore";
+import {
+  collection,
+  query,
+  where,
+  onSnapshot,
+  deleteDoc,
+  doc,
+  getDoc,
+  updateDoc,
+} from "firebase/firestore";
 import DeleteIcon from "@mui/icons-material/Delete";
 
 export default function PlaceDashboard({ user }) {
@@ -67,6 +88,20 @@ export default function PlaceDashboard({ user }) {
     }
   };
 
+  const handleCancelReservation = async (turno, userUid) => {
+    try {
+      const turnoRef = doc(db, "turnos", turno.id);
+      await updateDoc(turnoRef, {
+        slotsAvailable: turno.slotsAvailable + 1,
+        reservations: turno.reservations.filter(uid => uid !== userUid),
+      });
+      alert(`Reserva del usuario ${userUid} cancelada y el turno está disponible.`);
+    } catch (err) {
+      console.error(err);
+      alert("Error al cancelar la reserva.");
+    }
+  };
+
   return (
     <Box sx={{ p: 3 }}>
       <Typography variant="h4">Dashboard del Lugar</Typography>
@@ -74,6 +109,7 @@ export default function PlaceDashboard({ user }) {
 
       <Button
         variant="contained"
+        color="primary"
         sx={{ mt: 3, mr: 2 }}
         onClick={() => navigate("/publish-turn")}
       >
@@ -90,25 +126,52 @@ export default function PlaceDashboard({ user }) {
       </Button>
 
       <Typography variant="h5" sx={{ mt: 4 }}>Tus Turnos Publicados</Typography>
-      <List>
-        {publishedTurns.length === 0 ? (
-          <Typography>No has publicado ningún turno todavía.</Typography>
-        ) : (
-          publishedTurns.map((turn) => (
-            <ListItem key={turn.id} divider>
-              <ListItemText
-                primary={`Fecha: ${turn.date} - Hora: ${turn.time}`}
-                secondary={`Slots disponibles: ${turn.slotsAvailable}`}
-              />
-              <ListItemSecondaryAction>
-                <IconButton edge="end" color="error" onClick={() => handleDeleteTurn(turn.id)}>
-                  <DeleteIcon />
-                </IconButton>
-              </ListItemSecondaryAction>
-            </ListItem>
-          ))
-        )}
-      </List>
+      {publishedTurns.length === 0 ? (
+        <Typography>No has publicado ningún turno todavía.</Typography>
+      ) : (
+        <Grid container spacing={2}>
+          {publishedTurns.map((turn) => (
+            <Grid item xs={12} sm={6} md={4} key={turn.id}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6">Fecha: {turn.date}</Typography>
+                  <Typography>Hora: {turn.time}</Typography>
+                  <Typography>Slots disponibles: {turn.slotsAvailable}</Typography>
+
+                  {/* Lista de usuarios reservados */}
+                  {turn.reservations && turn.reservations.length > 0 && (
+                    <>
+                      <Typography variant="subtitle2" sx={{ mt: 1 }}>Usuarios Reservados:</Typography>
+                      {turn.reservations.map(uid => (
+                        <Box key={uid} sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mt: 0.5 }}>
+                          <Typography variant="body2">{uid}</Typography>
+                          <Button
+                            variant="outlined"
+                            color="error"
+                            size="small"
+                            onClick={() => handleCancelReservation(turn, uid)}
+                          >
+                            Cancelar Reserva
+                          </Button>
+                        </Box>
+                      ))}
+                    </>
+                  )}
+
+                  <Button
+                    variant="contained"
+                    color="error"
+                    sx={{ mt: 1 }}
+                    onClick={() => handleDeleteTurn(turn.id)}
+                  >
+                    Eliminar Turno
+                  </Button>
+                </CardContent>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+      )}
     </Box>
   );
 }
