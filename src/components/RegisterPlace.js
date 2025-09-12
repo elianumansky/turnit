@@ -37,7 +37,15 @@ export default function RegisterPlace() {
         userId: user.uid,
         name: placeName,
         email: user.email,
-        address, // dirección manual obligatoria
+        address,
+        createdAt: new Date(),
+      });
+
+      // 3) Crear el documento en 'users' con rol
+      await setDoc(doc(db, "users", user.uid), {
+        email: user.email,
+        role: "place",
+        placeId, // opcional, útil para el dashboard
         createdAt: new Date(),
       });
 

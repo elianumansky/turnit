@@ -16,28 +16,32 @@ export default function Login() {
     setError('');
 
     try {
+      // Autenticación con Firebase
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Buscar en Firestore el rol del usuario
+      // Obtener documento del usuario en Firestore
       const userDocRef = doc(db, 'users', user.uid);
       const userDoc = await getDoc(userDocRef);
 
-      if (userDoc.exists()) {
-        const userData = userDoc.data();
-        console.log("Usuario logueado:", userData);
-
-        if (userData.role === 'place') {
-          navigate('/place-dashboard');
-        } else {
-          navigate('/dashboard');
-        }
-      } else {
-        console.warn("El documento del usuario no existe en Firestore.");
-        navigate('/dashboard');
+      if (!userDoc.exists()) {
+        setError('Usuario no registrado en Firestore');
+        return;
       }
-    } catch (error) {
-      console.error('Error al iniciar sesión:', error);
+
+      const userData = userDoc.data();
+      console.log('Datos del usuario:', userData);
+
+      // Redirección según rol
+      if (userData.role === 'place') {
+        navigate('/place-dashboard');
+      } else if (userData.role === 'user') {
+        navigate('/user-dashboard');
+      } else {
+        setError('Rol de usuario desconocido');
+      }
+    } catch (err) {
+      console.error('Error al iniciar sesión:', err);
       setError('Credenciales incorrectas o usuario no registrado.');
     }
   };
@@ -108,7 +112,7 @@ export default function Login() {
           onChange={(e) => setPassword(e.target.value)}
           required
         />
-        {error && <Typography color="error" style={styles.error}>{error}</Typography>}
+        {error && <Typography style={styles.error}>{error}</Typography>}
         <Button variant="contained" type="submit" style={styles.button}>
           Iniciar Sesión
         </Button>

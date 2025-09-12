@@ -1,133 +1,174 @@
 import React, { useState, useEffect } from "react";
-import { collection, doc, setDoc, getDoc } from "firebase/firestore";
+import { collection, query, where, getDocs, addDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../firebase";
 import { Typography, Box, TextField, Button } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 
 export default function PublishTurn({ user }) {
-  const [date, setDate] = useState("");
-  const [time, setTime] = useState("");
-  const [slots, setSlots] = useState(1);
+  const [date, setDate] = useState("");       // yyyy-mm-dd
+  const [time, setTime] = useState("");       // hh:mm
+  const [slots, setSlots] = useState(1);      // número de cupos
   const [placeId, setPlaceId] = useState(null);
   const [placeName, setPlaceName] = useState("");
   const [loadingPlace, setLoadingPlace] = useState(true);
+  const [errorMsg, setErrorMsg] = useState("");
   const navigate = useNavigate();
 
-  // Cargar placeId y nombre del lugar
+  // ------------------------------
+  // Buscar automáticamente el lugar del usuario
+  // ------------------------------
   useEffect(() => {
     const fetchPlace = async () => {
-      if (!user) {
-        setLoadingPlace(false);
-        return;
-      }
+      if (!user) return;
+
       try {
-        const userRef = doc(db, "places", user.uid);
-        const userSnap = await getDoc(userRef);
-        if (userSnap.exists()) {
-          const data = userSnap.data();
-          setPlaceId(data.placeId || user.uid); // fallback: uid si no hay placeId
-          setPlaceName(data.name || "Mi Lugar");
+        setLoadingPlace(true);
+        setErrorMsg("");
+
+        // Intentar buscar en "places"
+        let q = query(collection(db, "places"), where("ownerId", "==", user.uid));
+        let snap = await getDocs(q);
+
+        if (!snap.empty) {
+          const d = snap.docs[0];
+          setPlaceId(d.id);
+          setPlaceName(d.data().name || "");
         } else {
-          console.log("No se encontró documento del lugar, se usará UID como placeId");
-          setPlaceId(user.uid);
-          setPlaceName("Mi Lugar");
+          // fallback: buscar en "lugares"
+          q = query(collection(db, "lugares"), where("ownerId", "==", user.uid));
+          snap = await getDocs(q);
+          if (!snap.empty) {
+            const d = snap.docs[0];
+            setPlaceId(d.id);
+            setPlaceName(d.data().name || "");
+          } else {
+            setErrorMsg("No se encontró un lugar asociado a tu usuario. Creá uno primero.");
+          }
         }
       } catch (err) {
-        console.error("Error al obtener datos del lugar:", err);
+        console.error("Error al cargar lugar:", err);
+        setErrorMsg("No se pudo cargar el lugar.");
       } finally {
         setLoadingPlace(false);
       }
     };
+
     fetchPlace();
   }, [user]);
 
-  const handlePublish = async () => {
-    if (!date || !time || !slots) {
-      alert("Por favor, completa todos los campos correctamente.");
+  // ------------------------------
+  // Publicar turno
+  // ------------------------------
+  const handlePublish = async (e) => {
+    e.preventDefault();
+    setErrorMsg("");
+
+    if (!user) {
+      setErrorMsg("Debes iniciar sesión.");
+      return;
+    }
+    if (!placeId) {
+      setErrorMsg("No hay un lugar asignado a tu usuario.");
+      return;
+    }
+    if (!date || !time) {
+      setErrorMsg("Completá fecha y hora.");
       return;
     }
 
     try {
-      const turnosRef = collection(db, "turnos");
-      const newTurnoRef = doc(turnosRef);
-      const turnoId = newTurnoRef.id;
+      const isoDateTime = new Date(`${date}T${time}:00`).toISOString();
 
-      await setDoc(newTurnoRef, {
-        turnoId,
+      const payload = {
+        userId: user.uid,
         placeId,
         placeName,
         date,
         time,
-        slotsAvailable: slots,
-        createdAt: new Date(),
-      });
+        dateTime: isoDateTime,
+        slots: Number(slots) || 1,
+        slotsAvailable: Number(slots) || 1,
+        reservations: [],
+        createdAt: serverTimestamp(),
+      };
 
-      alert("Turno publicado con éxito!");
+      await addDoc(collection(db, "turnos"), payload);
+
+      // Redirigir al PlaceDashboard
       navigate("/place-dashboard");
     } catch (err) {
       console.error("Error al publicar turno:", err);
-      alert("Hubo un error al publicar el turno.");
+      setErrorMsg("No se pudo publicar el turno. Revisá la consola.");
     }
   };
 
-  if (loadingPlace)
+  // ------------------------------
+  // Render
+  // ------------------------------
+  if (!user) {
     return (
-      <Typography sx={{ p: 3 }}>Cargando datos del lugar...</Typography>
+      <Box p={2}>
+        <Typography>Iniciá sesión para publicar turnos.</Typography>
+      </Box>
     );
+  }
 
   return (
-    <Box sx={{ p: 3, maxWidth: 400, mx: "auto" }}>
-      <Typography variant="h4" sx={{ mb: 3, fontWeight: "bold" }}>
-        Publicar Turnos Disponibles
-      </Typography>
+    <Box p={2} component="form" onSubmit={handlePublish}>
+      <Typography variant="h6" gutterBottom>Publicar Turno</Typography>
 
-      <TextField
-        label="Fecha"
-        type="date"
-        value={date}
-        onChange={(e) => setDate(e.target.value)}
-        fullWidth
-        sx={{ mb: 2 }}
-        InputLabelProps={{ shrink: true }}
-      />
+      {loadingPlace ? (
+        <Typography>Cargando lugar…</Typography>
+      ) : (
+        <>
+          <Box mb={2}>
+            <Typography variant="body2" color="text.secondary">Lugar</Typography>
+            <Typography variant="subtitle1">
+              {placeName ? `${placeName} (ID: ${placeId})` : "—"}
+            </Typography>
+          </Box>
 
-      <TextField
-        label="Hora"
-        type="time"
-        value={time}
-        onChange={(e) => setTime(e.target.value)}
-        fullWidth
-        sx={{ mb: 2 }}
-        InputLabelProps={{ shrink: true }}
-      />
+          <Box mb={2} display="flex" gap={2}>
+            <TextField
+              label="Fecha"
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              fullWidth
+              required
+            />
+            <TextField
+              label="Hora"
+              type="time"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              fullWidth
+              required
+            />
+          </Box>
 
-      <TextField
-        label="Número de Slots"
-        type="number"
-        value={slots}
-        onChange={(e) => setSlots(Number(e.target.value))}
-        fullWidth
-        sx={{ mb: 3 }}
-        inputProps={{ min: 1 }}
-      />
+          <Box mb={2}>
+            <TextField
+              label="Cupos"
+              type="number"
+              value={slots}
+              onChange={(e) => setSlots(e.target.value)}
+              inputProps={{ min: 1 }}
+              fullWidth
+            />
+          </Box>
 
-      <Button
-        variant="contained"
-        fullWidth
-        sx={{
-          background: "linear-gradient(135deg, #4e54c8, #8f94fb)",
-          color: "#fff",
-          fontWeight: "bold",
-          py: 1.5,
-          ":hover": {
-            background: "linear-gradient(135deg, #8f94fb, #4e54c8)",
-          },
-        }}
-        onClick={handlePublish}
-        disabled={!date || !time || !slots || !placeId}
-      >
-        Publicar Turno
-      </Button>
+          {errorMsg && (
+            <Box mb={2}>
+              <Typography color="error">{errorMsg}</Typography>
+            </Box>
+          )}
+
+          <Button type="submit" variant="contained">Publicar</Button>
+        </>
+      )}
     </Box>
   );
 }

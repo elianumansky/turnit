@@ -3,11 +3,6 @@ import {
   Typography,
   Box,
   Button,
-  List,
-  ListItem,
-  ListItemText,
-  ListItemSecondaryAction,
-  IconButton,
   Grid,
   Card,
   CardContent,
@@ -22,35 +17,48 @@ import {
   onSnapshot,
   deleteDoc,
   doc,
-  getDoc,
+  getDocs,
   updateDoc,
 } from "firebase/firestore";
-import DeleteIcon from "@mui/icons-material/Delete";
 
 export default function PlaceDashboard({ user }) {
   const [publishedTurns, setPublishedTurns] = useState([]);
   const [placeId, setPlaceId] = useState(null);
+  const [placeName, setPlaceName] = useState("");
   const navigate = useNavigate();
 
-  // Obtener placeId del usuario logueado
+  // Obtener el lugar del usuario logueado
   useEffect(() => {
-    const fetchPlaceId = async () => {
+    const fetchPlace = async () => {
       if (!user) return;
 
       try {
-        const placeRef = doc(db, "places", user.uid);
-        const placeSnap = await getDoc(placeRef);
-        if (placeSnap.exists()) {
-          const data = placeSnap.data();
-          setPlaceId(data.placeId);
+        // Buscar primer lugar con ownerId == user.uid
+        let q = query(collection(db, "places"), where("ownerId", "==", user.uid));
+        let snap = await getDocs(q);
+
+        if (!snap.empty) {
+          const d = snap.docs[0];
+          setPlaceId(d.id);
+          setPlaceName(d.data().name || "");
         } else {
-          console.log("No se encontró documento del lugar");
+          // fallback si tu colección es "lugares"
+          q = query(collection(db, "lugares"), where("ownerId", "==", user.uid));
+          snap = await getDocs(q);
+          if (!snap.empty) {
+            const d = snap.docs[0];
+            setPlaceId(d.id);
+            setPlaceName(d.data().name || "");
+          } else {
+            console.log("No se encontró un lugar asociado al usuario.");
+          }
         }
       } catch (err) {
-        console.error("Error al obtener placeId:", err);
+        console.error("Error al obtener el lugar:", err);
       }
     };
-    fetchPlaceId();
+
+    fetchPlace();
   }, [user]);
 
   // Obtener turnos publicados del lugar
@@ -92,8 +100,8 @@ export default function PlaceDashboard({ user }) {
     try {
       const turnoRef = doc(db, "turnos", turno.id);
       await updateDoc(turnoRef, {
-        slotsAvailable: turno.slotsAvailable + 1,
-        reservations: turno.reservations.filter(uid => uid !== userUid),
+        slotsAvailable: (turno.slotsAvailable || turno.slots) + 1,
+        reservations: (turno.reservations || []).filter(uid => uid !== userUid),
       });
       alert(`Reserva del usuario ${userUid} cancelada y el turno está disponible.`);
     } catch (err) {
@@ -106,6 +114,9 @@ export default function PlaceDashboard({ user }) {
     <Box sx={{ p: 3 }}>
       <Typography variant="h4">Dashboard del Lugar</Typography>
       <Typography sx={{ mt: 2 }}>¡Bienvenido, {user.email}!</Typography>
+      <Typography variant="h6" sx={{ mt: 1 }}>
+        Lugar: {placeName || "—"}
+      </Typography>
 
       <Button
         variant="contained"
@@ -136,9 +147,8 @@ export default function PlaceDashboard({ user }) {
                 <CardContent>
                   <Typography variant="h6">Fecha: {turn.date}</Typography>
                   <Typography>Hora: {turn.time}</Typography>
-                  <Typography>Slots disponibles: {turn.slotsAvailable}</Typography>
+                  <Typography>Slots disponibles: {turn.slotsAvailable || turn.slots}</Typography>
 
-                  {/* Lista de usuarios reservados */}
                   {turn.reservations && turn.reservations.length > 0 && (
                     <>
                       <Typography variant="subtitle2" sx={{ mt: 1 }}>Usuarios Reservados:</Typography>
