@@ -65,17 +65,82 @@ export default function RegisterPlace() {
     }
   };
 
+  const styles = {
+    container: {
+      minHeight: "100vh",
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "center",
+      background: "linear-gradient(135deg, #4e54c8, #8f94fb)",
+      p: 3,
+    },
+    card: {
+      background: "#6c63ff",
+      p: 4,
+      borderRadius: 3,
+      width: 360,
+      color: "#fff",
+      boxShadow: "0 8px 20px rgba(0,0,0,0.3)",
+    },
+    input: {
+      mb: 2,
+      "& .MuiInputBase-root": { color: "#fff" },
+      "& .MuiInputLabel-root": { color: "#ddd" },
+      "& .MuiOutlinedInput-root .MuiOutlinedInput-notchedOutline": { borderColor: "#bbb" },
+      "& .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "#fff" },
+    },
+    button: {
+      mt: 1,
+      backgroundColor: "#fff",
+      color: "#6c63ff",
+      "&:hover": { backgroundColor: "#eee" },
+    },
+    errorText: { mb: 2, color: "#ff6b81" },
+  };
+
   return (
-    <Box sx={{ minHeight: "100vh", display: "flex", justifyContent: "center", alignItems: "center", p: 3 }}>
-      <Box sx={{ background: "#fff", p: 3, borderRadius: 2, width: 350 }}>
-        <Typography variant="h5" mb={2}>Registrar mi Lugar</Typography>
+    <Box sx={styles.container}>
+      <Box sx={styles.card}>
+        <Typography variant="h5" mb={3} align="center">
+          Registrar mi Lugar
+        </Typography>
         <form onSubmit={handleRegister}>
-          <TextField label="Nombre del Lugar" value={placeName} onChange={(e) => setPlaceName(e.target.value)} fullWidth required sx={{ mb: 2 }} />
-          <TextField label="Dirección" value={address} onChange={(e) => setAddress(e.target.value)} fullWidth required sx={{ mb: 2 }} />
-          <TextField label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} fullWidth required sx={{ mb: 2 }} />
-          <TextField label="Contraseña" type="password" value={password} onChange={(e) => setPassword(e.target.value)} fullWidth required sx={{ mb: 2 }} />
-          {error && <Typography color="error" sx={{ mb: 2 }}>{error}</Typography>}
-          <Button type="submit" variant="contained" color="primary" fullWidth disabled={loading}>
+          <TextField
+            label="Nombre del Lugar"
+            value={placeName}
+            onChange={(e) => setPlaceName(e.target.value)}
+            fullWidth
+            required
+            sx={styles.input}
+          />
+          <TextField
+            label="Dirección"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            fullWidth
+            required
+            sx={styles.input}
+          />
+          <TextField
+            label="Email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            fullWidth
+            required
+            sx={styles.input}
+          />
+          <TextField
+            label="Contraseña"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            fullWidth
+            required
+            sx={styles.input}
+          />
+          {error && <Typography sx={styles.errorText}>{error}</Typography>}
+          <Button type="submit" variant="contained" fullWidth sx={styles.button} disabled={loading}>
             {loading ? "Registrando..." : "Registrar Lugar"}
           </Button>
         </form>

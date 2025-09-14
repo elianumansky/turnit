@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { collection, query, where, onSnapshot, doc, updateDoc } from "firebase/firestore";
+import { collection, query, where, onSnapshot, doc, runTransaction } from "firebase/firestore";
 import { db, auth } from "../firebase";
 import { Typography, Card, CardContent, Button, Grid, Box } from "@mui/material";
 import { signOut } from "firebase/auth";
@@ -67,18 +67,22 @@ export default function UserDashboard({ user }) {
   const handleReserve = async (turno) => {
     try {
       const turnoRef = doc(db, "turnos", turno.id);
-      const currentSlots = turno.slotsAvailable ?? 0;
-      if (currentSlots <= 0) return;
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(turnoRef);
+        if (!snap.exists()) throw new Error("Turno inexistente");
+        const t = snap.data();
+        if (t.slotsAvailable <= 0) throw new Error("No hay cupos disponibles");
+        if (t.reservations?.includes(user.uid)) throw new Error("Ya reservaste este turno");
 
-      await updateDoc(turnoRef, {
-        slotsAvailable: currentSlots - 1,
-        reservations: turno.reservations ? [...turno.reservations, user.uid] : [user.uid],
+        tx.update(turnoRef, {
+          slotsAvailable: t.slotsAvailable - 1,
+          reservations: t.reservations ? [...t.reservations, user.uid] : [user.uid],
+        });
       });
-
-      setError(""); // limpiar errores
+      setError("");
     } catch (err) {
       console.error("Error al reservar turno:", err);
-      setError("Ocurrió un error al reservar el turno");
+      setError(err.message || "Ocurrió un error al reservar el turno");
     }
   };
 
@@ -88,25 +92,21 @@ export default function UserDashboard({ user }) {
   const handleCancel = async (turno) => {
     try {
       const turnoRef = doc(db, "turnos", turno.id);
-      const currentSlots = turno.slotsAvailable ?? 0;
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(turnoRef);
+        if (!snap.exists()) throw new Error("Turno inexistente");
+        const t = snap.data();
+        if (!t.reservations?.includes(user.uid)) throw new Error("No tenés reserva en este turno");
 
-      if ((currentSlots + 1) >= turno.slots) {
-        // Si al cancelar se completa el total de slots, eliminamos el turno
-        await updateDoc(turnoRef, {
-          slotsAvailable: turno.slots,
-          reservations: [],
+        tx.update(turnoRef, {
+          slotsAvailable: t.slotsAvailable + 1,
+          reservations: t.reservations.filter(uid => uid !== user.uid),
         });
-      } else {
-        await updateDoc(turnoRef, {
-          slotsAvailable: currentSlots + 1,
-          reservations: (turno.reservations || []).filter(uid => uid !== user.uid),
-        });
-      }
-
-      setError(""); // limpiar errores
+      });
+      setError("");
     } catch (err) {
       console.error("Error al cancelar turno:", err);
-      setError("Ocurrió un error al cancelar el turno");
+      setError(err.message || "Ocurrió un error al cancelar el turno");
     }
   };
 
@@ -128,9 +128,9 @@ export default function UserDashboard({ user }) {
   const styles = {
     container: {
       p: 3,
-      maxWidth: "1000px",
-      margin: "0 auto",
-      minHeight: "100vh",
+      width: "100vw",
+      height: "100vh",
+      overflowY: "auto",
       background: "linear-gradient(135deg, #4e54c8, #8f94fb)",
       color: "#fff",
     },
