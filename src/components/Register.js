@@ -1,10 +1,9 @@
 import React, { useState } from "react";
 import { createUserWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc } from "firebase/firestore";
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { TextField, Button, Typography, Box } from "@mui/material";
 import { useNavigate } from "react-router-dom";
-import bcrypt from "bcryptjs";
 
 // Función para convertir dirección en coordenadas con Nominatim
 async function geocodeAddress(address) {
@@ -23,7 +22,7 @@ async function geocodeAddress(address) {
     };
   } catch (err) {
     console.error("Error al geocodificar:", err);
-    return null; // Retornar null si falla geocodificación
+    return null;
   }
 }
 
@@ -33,14 +32,17 @@ export default function Register() {
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
   const handleRegister = async (e) => {
     e.preventDefault();
     setError("");
+    setLoading(true);
 
     if (!email || !password || !name || !address) {
       setError("Por favor completa todos los campos");
+      setLoading(false);
       return;
     }
 
@@ -49,33 +51,33 @@ export default function Register() {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // 2) Hashear la contraseña (opcional si también la quieres en Firestore)
-      const hashedPassword = bcrypt.hashSync(password, 10);
-
-      // 3) Geocodificar la dirección
+      // 2) Geocodificar la dirección
       const location = await geocodeAddress(address);
 
-      // 4) Guardar datos del usuario en Firestore
+      // 3) Guardar datos del usuario en Firestore
       await setDoc(doc(db, "users", user.uid), {
         userId: user.uid,
         email: user.email,
-        password: hashedPassword,
         name,
         role: "user",
         address,
         location,
-        createdAt: new Date(),
+        createdAt: serverTimestamp(), // timestamp seguro de Firebase
       });
 
       console.log("Usuario registrado con éxito ✅");
-      navigate("/dashboard");
+      navigate("/user-dashboard"); // redirige al dashboard correcto
     } catch (err) {
       console.error("Error al registrar el usuario:", err);
       if (err.code === "auth/email-already-in-use") {
         setError("El correo electrónico ya está registrado.");
+      } else if (err.code === "auth/weak-password") {
+        setError("La contraseña debe tener al menos 6 caracteres.");
       } else {
         setError("Error al registrar el usuario. Revisa los datos e intenta nuevamente.");
       }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -142,8 +144,8 @@ export default function Register() {
           required
         />
         {error && <Typography style={styles.error}>{error}</Typography>}
-        <Button variant="contained" color="primary" type="submit">
-          Registrar
+        <Button variant="contained" color="primary" type="submit" disabled={loading}>
+          {loading ? "Registrando..." : "Registrar"}
         </Button>
       </form>
     </Box>

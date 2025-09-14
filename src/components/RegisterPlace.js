@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { createUserWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc, collection } from "firebase/firestore";
+import { doc, setDoc, collection, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { TextField, Button, Typography, Box } from "@mui/material";
 import { useNavigate } from "react-router-dom";
@@ -11,122 +11,75 @@ export default function RegisterPlace() {
   const [placeName, setPlaceName] = useState("");
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
   const handleRegister = async (e) => {
     e.preventDefault();
     setError("");
+    setLoading(true);
 
     if (!email || !password || !placeName || !address) {
       setError("Completa todos los campos");
+      setLoading(false);
       return;
     }
 
     try {
-      // 1) Crear el usuario en Firebase Auth
+      // 1) Crear usuario en Firebase Auth
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
       // 2) Crear el documento del lugar en Firestore
       const placesRef = collection(db, "places");
-      const newPlaceRef = doc(placesRef);
+      const newPlaceRef = doc(placesRef); // ID autogenerado
       const placeId = newPlaceRef.id;
 
       await setDoc(newPlaceRef, {
         placeId,
-        userId: user.uid,
+        ownerId: user.uid,
         name: placeName,
         email: user.email,
         address,
-        createdAt: new Date(),
+        createdAt: serverTimestamp(),
       });
 
-      // 3) Crear el documento en 'users' con rol
+      // 3) Crear documento en 'users' con rol 'place'
       await setDoc(doc(db, "users", user.uid), {
+        userId: user.uid,
         email: user.email,
         role: "place",
-        placeId, // opcional, útil para el dashboard
-        createdAt: new Date(),
+        placeId,
+        placeName,
+        createdAt: serverTimestamp(),
       });
 
-      alert("Lugar registrado con éxito ✅");
       navigate("/place-dashboard");
     } catch (err) {
-      console.error("Error al registrar el lugar:", err);
-      setError("Error al registrar el lugar. Revisa los datos e intenta nuevamente.");
+      console.error(err);
+      if (err.code === "auth/email-already-in-use") setError("Correo ya registrado.");
+      else if (err.code === "auth/weak-password") setError("La contraseña debe tener al menos 6 caracteres.");
+      else setError("Error al registrar el lugar. Revisa los datos.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const styles = {
-    container: {
-      minHeight: "100vh",
-      display: "flex",
-      flexDirection: "column",
-      justifyContent: "center",
-      alignItems: "center",
-      background: "linear-gradient(135deg, #4e54c8, #8f94fb)",
-      color: "#fff",
-      textAlign: "center",
-      fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
-      padding: "20px",
-    },
-    title: {
-      fontSize: "2rem",
-      fontWeight: "bold",
-      marginBottom: "20px",
-    },
-    form: {
-      background: "#fff",
-      padding: "20px",
-      borderRadius: "10px",
-      width: "100%",
-      maxWidth: "400px",
-      color: "#333",
-      display: "flex",
-      flexDirection: "column",
-      gap: "15px",
-    },
-    error: {
-      color: "red",
-      fontSize: "0.9rem",
-    },
-  };
-
   return (
-    <Box style={styles.container}>
-      <Typography variant="h5" style={styles.title}>Registrar mi Lugar</Typography>
-      <form onSubmit={handleRegister} style={styles.form}>
-        <TextField
-          label="Nombre del Lugar"
-          value={placeName}
-          onChange={(e) => setPlaceName(e.target.value)}
-          required
-        />
-        <TextField
-          label="Dirección"
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          required
-        />
-        <TextField
-          label="Email"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
-        <TextField
-          label="Contraseña"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-        {error && <Typography style={styles.error}>{error}</Typography>}
-        <Button type="submit" variant="contained" color="primary">
-          Registrar Lugar
-        </Button>
-      </form>
+    <Box sx={{ minHeight: "100vh", display: "flex", justifyContent: "center", alignItems: "center", p: 3 }}>
+      <Box sx={{ background: "#fff", p: 3, borderRadius: 2, width: 350 }}>
+        <Typography variant="h5" mb={2}>Registrar mi Lugar</Typography>
+        <form onSubmit={handleRegister}>
+          <TextField label="Nombre del Lugar" value={placeName} onChange={(e) => setPlaceName(e.target.value)} fullWidth required sx={{ mb: 2 }} />
+          <TextField label="Dirección" value={address} onChange={(e) => setAddress(e.target.value)} fullWidth required sx={{ mb: 2 }} />
+          <TextField label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} fullWidth required sx={{ mb: 2 }} />
+          <TextField label="Contraseña" type="password" value={password} onChange={(e) => setPassword(e.target.value)} fullWidth required sx={{ mb: 2 }} />
+          {error && <Typography color="error" sx={{ mb: 2 }}>{error}</Typography>}
+          <Button type="submit" variant="contained" color="primary" fullWidth disabled={loading}>
+            {loading ? "Registrando..." : "Registrar Lugar"}
+          </Button>
+        </form>
+      </Box>
     </Box>
   );
 }

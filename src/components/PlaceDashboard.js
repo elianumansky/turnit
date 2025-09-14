@@ -1,25 +1,11 @@
 import React, { useEffect, useState } from "react";
 import {
-  Typography,
-  Box,
-  Button,
-  Grid,
-  Card,
-  CardContent,
+  Typography, Box, Button, Grid, Card, CardContent,
 } from "@mui/material";
-import { useNavigate } from 'react-router-dom';
-import { auth, db } from '../firebase';
-import { signOut } from 'firebase/auth';
-import {
-  collection,
-  query,
-  where,
-  onSnapshot,
-  deleteDoc,
-  doc,
-  getDocs,
-  updateDoc,
-} from "firebase/firestore";
+import { useNavigate } from "react-router-dom";
+import { auth, db } from "../firebase";
+import { signOut } from "firebase/auth";
+import { collection, query, where, onSnapshot, updateDoc, deleteDoc, doc, getDocs } from "firebase/firestore";
 
 export default function PlaceDashboard({ user }) {
   const [publishedTurns, setPublishedTurns] = useState([]);
@@ -27,123 +13,119 @@ export default function PlaceDashboard({ user }) {
   const [placeName, setPlaceName] = useState("");
   const navigate = useNavigate();
 
-  // Obtener el lugar del usuario logueado
+  // Obtener lugar del usuario
   useEffect(() => {
     const fetchPlace = async () => {
-      if (!user) return;
+      if (!user?.uid) return;
 
       try {
-        // Buscar primer lugar con ownerId == user.uid
-        let q = query(collection(db, "places"), where("ownerId", "==", user.uid));
-        let snap = await getDocs(q);
+        const q = query(collection(db, "places"), where("ownerId", "==", user.uid));
+        const snap = await getDocs(q);
 
         if (!snap.empty) {
-          const d = snap.docs[0];
-          setPlaceId(d.id);
-          setPlaceName(d.data().name || "");
+          const firstPlace = snap.docs[0];
+          setPlaceId(firstPlace.id);
+          setPlaceName(firstPlace.data().name || "");
         } else {
-          // fallback si tu colección es "lugares"
-          q = query(collection(db, "lugares"), where("ownerId", "==", user.uid));
-          snap = await getDocs(q);
-          if (!snap.empty) {
-            const d = snap.docs[0];
-            setPlaceId(d.id);
-            setPlaceName(d.data().name || "");
-          } else {
-            console.log("No se encontró un lugar asociado al usuario.");
-          }
+          setPlaceId(null);
+          setPlaceName("");
         }
       } catch (err) {
-        console.error("Error al obtener el lugar:", err);
+        console.error(err);
       }
     };
-
     fetchPlace();
   }, [user]);
 
-  // Obtener turnos publicados del lugar
+  // Obtener turnos del lugar
   useEffect(() => {
     if (!placeId) return;
-
     const q = query(collection(db, "turnos"), where("placeId", "==", placeId));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const turnsData = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      }));
+      const turnsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setPublishedTurns(turnsData);
     });
-
     return () => unsubscribe();
   }, [placeId]);
 
   const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      navigate("/");
-    } catch (err) {
-      console.error("Error al cerrar sesión:", err);
-    }
+    await signOut(auth);
+    navigate("/");
   };
 
-  const handleDeleteTurn = async (turnId) => {
-    try {
-      await deleteDoc(doc(db, "turnos", turnId));
-      alert("Turno eliminado con éxito.");
-    } catch (err) {
-      console.error(err);
-      alert("Error al eliminar turno.");
+  // Manejo de eliminar slot / turno completo
+  const handleDeleteSlot = async (turn) => {
+    const turnoRef = doc(db, "turnos", turn.id);
+
+    if ((turn.slotsAvailable || turn.slots) > 1) {
+      await updateDoc(turnoRef, {
+        slotsAvailable: (turn.slotsAvailable || turn.slots) - 1
+      });
+    } else {
+      await deleteDoc(turnoRef);
     }
   };
 
   const handleCancelReservation = async (turno, userUid) => {
-    try {
-      const turnoRef = doc(db, "turnos", turno.id);
-      await updateDoc(turnoRef, {
-        slotsAvailable: (turno.slotsAvailable || turno.slots) + 1,
-        reservations: (turno.reservations || []).filter(uid => uid !== userUid),
-      });
-      alert(`Reserva del usuario ${userUid} cancelada y el turno está disponible.`);
-    } catch (err) {
-      console.error(err);
-      alert("Error al cancelar la reserva.");
-    }
+    const turnoRef = doc(db, "turnos", turno.id);
+    await updateDoc(turnoRef, {
+      slotsAvailable: (turno.slotsAvailable || turno.slots) + 1,
+      reservations: (turno.reservations || []).filter(uid => uid !== userUid),
+    });
+  };
+
+  // --- Estilos violeta ---
+  const styles = {
+    container: {
+      p: 3,
+      minHeight: "100vh",
+      background: "linear-gradient(135deg, #4e54c8, #8f94fb)",
+      color: "#fff",
+    },
+    card: {
+      background: "#6c63ff",
+      color: "#fff",
+    },
+    buttonPrimary: {
+      mr: 2,
+      backgroundColor: "#fff",
+      color: "#6c63ff",
+      "&:hover": { backgroundColor: "#eee" },
+    },
+    buttonSecondary: {
+      backgroundColor: "#ff6cec",
+      "&:hover": { backgroundColor: "#ff4ed9" },
+    },
   };
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box sx={styles.container}>
       <Typography variant="h4">Dashboard del Lugar</Typography>
       <Typography sx={{ mt: 2 }}>¡Bienvenido, {user.email}!</Typography>
-      <Typography variant="h6" sx={{ mt: 1 }}>
-        Lugar: {placeName || "—"}
-      </Typography>
+      <Typography variant="h6" sx={{ mt: 1 }}>Lugar: {placeName || "—"}</Typography>
 
-      <Button
-        variant="contained"
-        color="primary"
-        sx={{ mt: 3, mr: 2 }}
-        onClick={() => navigate("/publish-turn")}
-      >
-        Publicar Turnos
-      </Button>
-
-      <Button
-        variant="contained"
-        color="secondary"
-        sx={{ mt: 3 }}
-        onClick={handleLogout}
-      >
-        Cerrar Sesión
-      </Button>
+      <Box sx={{ mt: 3, mb: 3 }}>
+        <Button
+          variant="contained"
+          sx={styles.buttonPrimary}
+          onClick={() => navigate("/publish-turn", { state: { placeId, placeName } })}
+          disabled={!placeId}
+        >
+          Publicar Turnos
+        </Button>
+        <Button variant="contained" sx={styles.buttonSecondary} onClick={handleLogout}>
+          Cerrar Sesión
+        </Button>
+      </Box>
 
       <Typography variant="h5" sx={{ mt: 4 }}>Tus Turnos Publicados</Typography>
       {publishedTurns.length === 0 ? (
         <Typography>No has publicado ningún turno todavía.</Typography>
       ) : (
         <Grid container spacing={2}>
-          {publishedTurns.map((turn) => (
+          {publishedTurns.map(turn => (
             <Grid item xs={12} sm={6} md={4} key={turn.id}>
-              <Card>
+              <Card sx={styles.card}>
                 <CardContent>
                   <Typography variant="h6">Fecha: {turn.date}</Typography>
                   <Typography>Hora: {turn.time}</Typography>
@@ -155,27 +137,15 @@ export default function PlaceDashboard({ user }) {
                       {turn.reservations.map(uid => (
                         <Box key={uid} sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mt: 0.5 }}>
                           <Typography variant="body2">{uid}</Typography>
-                          <Button
-                            variant="outlined"
-                            color="error"
-                            size="small"
-                            onClick={() => handleCancelReservation(turn, uid)}
-                          >
-                            Cancelar Reserva
-                          </Button>
+                          <Button variant="outlined" color="error" size="small"
+                            onClick={() => handleCancelReservation(turn, uid)}>Cancelar Reserva</Button>
                         </Box>
                       ))}
                     </>
                   )}
 
-                  <Button
-                    variant="contained"
-                    color="error"
-                    sx={{ mt: 1 }}
-                    onClick={() => handleDeleteTurn(turn.id)}
-                  >
-                    Eliminar Turno
-                  </Button>
+                  <Button variant="contained" color="secondary" sx={{ mt: 1 }}
+                    onClick={() => handleDeleteSlot(turn)}>Eliminar Slot</Button>
                 </CardContent>
               </Card>
             </Grid>

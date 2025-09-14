@@ -1,6 +1,7 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { Typography, Button, Box } from "@mui/material";
+import logo from "../utils/logo.png"; // importa tu logo
 
 export default function Start() {
   const styles = {
@@ -16,17 +17,15 @@ export default function Start() {
       fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
       padding: "20px",
     },
-    title: {
-      fontSize: "2.5rem",
-      fontWeight: "bold",
+    logo: {
+      width: "60%",       // ocupa 60% del ancho disponible
+      maxWidth: "200px",  // nunca más grande de 200px
+      height: "auto",
       marginBottom: "10px",
     },
     subtitle: {
       fontSize: "1.2rem",
       marginBottom: "30px",
-    },
-    link: {
-      textDecoration: "none",
     },
     buttonGroup: {
       display: "flex",
@@ -34,6 +33,8 @@ export default function Start() {
       alignItems: "center",
       gap: "15px",
       marginTop: "20px",
+      width: "100%",
+      maxWidth: "300px",
     },
     button: {
       padding: "12px 24px",
@@ -44,6 +45,7 @@ export default function Start() {
       fontSize: "1rem",
       fontWeight: "bold",
       transition: "all 0.3s ease",
+      width: "100%",
       "&:hover": {
         backgroundColor: "#fff",
         color: "#4e54c8",
@@ -54,12 +56,13 @@ export default function Start() {
 
   return (
     <Box sx={styles.container}>
-      <Typography variant="h3" component="h1" sx={styles.title}>
-        TurnIt
-      </Typography>
+      {/* Logo responsive */}
+      <img src={logo} alt="TurnIt" style={styles.logo} />
+
       <Typography variant="h6" sx={styles.subtitle}>
         ¡La app de turnos definitiva!
       </Typography>
+
       <Box sx={styles.buttonGroup}>
         <Button
           component={Link}

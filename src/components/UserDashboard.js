@@ -1,9 +1,12 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { collection, query, where, onSnapshot, doc, updateDoc } from "firebase/firestore";
-import { db } from "../firebase";
+import { db, auth } from "../firebase";
 import { Typography, Card, CardContent, Button, Grid, Box } from "@mui/material";
+import { signOut } from "firebase/auth";
+import { useNavigate } from "react-router-dom";
 
 export default function UserDashboard({ user }) {
+  const navigate = useNavigate();
   const [availableTurns, setAvailableTurns] = useState([]);
   const [userTurns, setUserTurns] = useState([]);
   const [loadingAvailable, setLoadingAvailable] = useState(true);
@@ -14,12 +17,15 @@ export default function UserDashboard({ user }) {
   // Turnos disponibles
   // ------------------------------
   useEffect(() => {
+    if (!user) return;
+
     const q = query(collection(db, "turnos"), where("slotsAvailable", ">", 0));
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
         const turns = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setAvailableTurns(turns);
+        const filtered = turns.filter(t => !(t.reservations?.includes(user.uid)));
+        setAvailableTurns(filtered);
         setLoadingAvailable(false);
       },
       (err) => {
@@ -30,7 +36,7 @@ export default function UserDashboard({ user }) {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [user]);
 
   // ------------------------------
   // Turnos reservados por el usuario
@@ -62,13 +68,14 @@ export default function UserDashboard({ user }) {
     try {
       const turnoRef = doc(db, "turnos", turno.id);
       const currentSlots = turno.slotsAvailable ?? 0;
-
       if (currentSlots <= 0) return;
 
       await updateDoc(turnoRef, {
         slotsAvailable: currentSlots - 1,
         reservations: turno.reservations ? [...turno.reservations, user.uid] : [user.uid],
       });
+
+      setError(""); // limpiar errores
     } catch (err) {
       console.error("Error al reservar turno:", err);
       setError("Ocurrió un error al reservar el turno");
@@ -83,10 +90,20 @@ export default function UserDashboard({ user }) {
       const turnoRef = doc(db, "turnos", turno.id);
       const currentSlots = turno.slotsAvailable ?? 0;
 
-      await updateDoc(turnoRef, {
-        slotsAvailable: currentSlots + 1,
-        reservations: (turno.reservations || []).filter(uid => uid !== user.uid),
-      });
+      if ((currentSlots + 1) >= turno.slots) {
+        // Si al cancelar se completa el total de slots, eliminamos el turno
+        await updateDoc(turnoRef, {
+          slotsAvailable: turno.slots,
+          reservations: [],
+        });
+      } else {
+        await updateDoc(turnoRef, {
+          slotsAvailable: currentSlots + 1,
+          reservations: (turno.reservations || []).filter(uid => uid !== user.uid),
+        });
+      }
+
+      setError(""); // limpiar errores
     } catch (err) {
       console.error("Error al cancelar turno:", err);
       setError("Ocurrió un error al cancelar el turno");
@@ -94,13 +111,61 @@ export default function UserDashboard({ user }) {
   };
 
   // ------------------------------
-  // Render
+  // Función para cerrar sesión
   // ------------------------------
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      navigate("/");
+    } catch (err) {
+      console.error("Error al cerrar sesión:", err);
+    }
+  };
+
+  // ------------------------------
+  // Estilos violeta
+  // ------------------------------
+  const styles = {
+    container: {
+      p: 3,
+      maxWidth: "1000px",
+      margin: "0 auto",
+      minHeight: "100vh",
+      background: "linear-gradient(135deg, #4e54c8, #8f94fb)",
+      color: "#fff",
+    },
+    card: {
+      background: "#6c63ff",
+      color: "#fff",
+    },
+    buttonReserve: {
+      mt: 1,
+      backgroundColor: "#fff",
+      color: "#6c63ff",
+      "&:hover": { backgroundColor: "#eee" },
+    },
+    buttonCancel: {
+      mt: 1,
+      backgroundColor: "#ff6cec",
+      "&:hover": { backgroundColor: "#ff4ed9" },
+    },
+    buttonLogout: {
+      mt: 2,
+      mb: 2,
+      backgroundColor: "#ff4ed9",
+      "&:hover": { backgroundColor: "#ff1ecb" },
+    },
+  };
+
   return (
-    <Box sx={{ p: 3, maxWidth: "1000px", margin: "0 auto" }}>
+    <Box sx={styles.container}>
       <Typography variant="h4" gutterBottom>
         Bienvenido {user.displayName || user.email}
       </Typography>
+
+      <Button variant="contained" sx={styles.buttonLogout} onClick={handleLogout}>
+        Cerrar Sesión
+      </Button>
 
       {/* ---------------- Turnos disponibles ---------------- */}
       <Typography variant="h5" gutterBottom sx={{ mt: 3 }}>Turnos Disponibles</Typography>
@@ -113,23 +178,20 @@ export default function UserDashboard({ user }) {
         <Grid container spacing={2} sx={{ mb: 4 }}>
           {availableTurns.map(turno => (
             <Grid item xs={12} sm={6} md={4} key={turno.id}>
-              <Card>
+              <Card sx={styles.card}>
                 <CardContent>
                   <Typography variant="h6">{turno.placeName || "—"}</Typography>
                   <Typography>Fecha: {turno.date}</Typography>
                   <Typography>Hora: {turno.time}</Typography>
                   <Typography>Turnos disponibles: {turno.slotsAvailable ?? 0}</Typography>
-                  {!turno.reservations?.includes(user.uid) && (
-                    <Button
-                      variant="contained"
-                      color="primary"
-                      sx={{ mt: 1 }}
-                      onClick={() => handleReserve(turno)}
-                      disabled={turno.slotsAvailable <= 0}
-                    >
-                      Reservar
-                    </Button>
-                  )}
+                  <Button
+                    variant="contained"
+                    sx={styles.buttonReserve}
+                    onClick={() => handleReserve(turno)}
+                    disabled={turno.slotsAvailable <= 0 || turno.reservations?.includes(user.uid)}
+                  >
+                    Reservar
+                  </Button>
                 </CardContent>
               </Card>
             </Grid>
@@ -147,7 +209,7 @@ export default function UserDashboard({ user }) {
         <Grid container spacing={2}>
           {userTurns.map(turno => (
             <Grid item xs={12} sm={6} md={4} key={turno.id}>
-              <Card>
+              <Card sx={styles.card}>
                 <CardContent>
                   <Typography variant="h6">{turno.placeName || "—"}</Typography>
                   <Typography>Fecha: {turno.date}</Typography>
@@ -155,8 +217,7 @@ export default function UserDashboard({ user }) {
                   <Typography>Turnos disponibles: {turno.slotsAvailable ?? 0}</Typography>
                   <Button
                     variant="contained"
-                    color="error"
-                    sx={{ mt: 1 }}
+                    sx={styles.buttonCancel}
                     onClick={() => handleCancel(turno)}
                   >
                     Cancelar Turno
