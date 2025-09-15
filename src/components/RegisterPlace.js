@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { createUserWithEmailAndPassword } from "firebase/auth";
+import { createUserWithEmailAndPassword, deleteUser } from "firebase/auth";
 import { doc, setDoc, collection, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { TextField, Button, Typography, Box } from "@mui/material";
@@ -25,40 +25,53 @@ export default function RegisterPlace() {
       return;
     }
 
+    let newUser = null;
+
     try {
       // 1) Crear usuario en Firebase Auth
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
+      newUser = userCredential.user;
 
-      // 2) Crear el documento del lugar en Firestore
-      const placesRef = collection(db, "places");
-      const newPlaceRef = doc(placesRef); // ID autogenerado
+      // 2) Crear documento en /places y obtener su ID
+      const newPlaceRef = doc(collection(db, "places"));
       const placeId = newPlaceRef.id;
 
       await setDoc(newPlaceRef, {
-        placeId,
-        ownerId: user.uid,
-        name: placeName,
-        email: user.email,
-        address,
-        createdAt: serverTimestamp(),
+        name: placeName.trim(),
+        createdBy: newUser.uid,
+        createdAt: serverTimestamp()
       });
 
-      // 3) Crear documento en 'users' con rol 'place'
-      await setDoc(doc(db, "users", user.uid), {
-        userId: user.uid,
-        email: user.email,
+      // 3) Guardar en /users con placeId y placeName
+      await setDoc(doc(db, "users", newUser.uid), {
+        userId: newUser.uid,
+        email: newUser.email,
         role: "place",
-        placeId,
-        placeName,
-        createdAt: serverTimestamp(),
+        placeId, // 🔹 clave para habilitar el botón en el dashboard
+        placeName: placeName.trim(),
+        address,
+        createdAt: serverTimestamp()
       });
 
+      // 4) Redirigir al dashboard
       navigate("/place-dashboard");
+
     } catch (err) {
       console.error(err);
+
+      // Si falla después de crear el usuario, lo borramos para no dejarlo huérfano
+      if (newUser) {
+        try {
+          await deleteUser(newUser);
+          console.log("Usuario borrado por error en el flujo");
+        } catch (deleteErr) {
+          console.error("No se pudo borrar el usuario:", deleteErr);
+        }
+      }
+
       if (err.code === "auth/email-already-in-use") setError("Correo ya registrado.");
       else if (err.code === "auth/weak-password") setError("La contraseña debe tener al menos 6 caracteres.");
+      else if (err.code?.includes("permission-denied")) setError("No tienes permisos para registrar el lugar. Revisa las reglas.");
       else setError("Error al registrar el lugar. Revisa los datos.");
     } finally {
       setLoading(false);

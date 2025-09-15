@@ -1,157 +1,101 @@
 import React, { useEffect, useState } from "react";
-import {
-  Typography, Box, Button, Grid, Card, CardContent,
-} from "@mui/material";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../firebase";
+import { Button, Typography, Box, CircularProgress, Alert } from "@mui/material";
 import { useNavigate } from "react-router-dom";
-import { auth, db } from "../firebase";
-import { signOut } from "firebase/auth";
-import { collection, query, where, onSnapshot, updateDoc, deleteDoc, doc, getDocs } from "firebase/firestore";
 
 export default function PlaceDashboard({ user }) {
-  const [publishedTurns, setPublishedTurns] = useState([]);
+  const navigate = useNavigate();
   const [placeId, setPlaceId] = useState(null);
   const [placeName, setPlaceName] = useState("");
-  const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  // Obtener lugar del usuario
   useEffect(() => {
-    const fetchPlace = async () => {
-      if (!user?.uid) return;
+    const fetchUserData = async () => {
+      if (!user?.uid) {
+        setLoading(false);
+        return;
+      }
 
       try {
-        const q = query(collection(db, "places"), where("ownerId", "==", user.uid));
-        const snap = await getDocs(q);
-
-        if (!snap.empty) {
-          const firstPlace = snap.docs[0];
-          setPlaceId(firstPlace.id);
-          setPlaceName(firstPlace.data().name || "");
+        const snap = await getDoc(doc(db, "users", user.uid));
+        if (snap.exists()) {
+          const data = snap.data();
+          setPlaceId(data.placeId || null);
+          setPlaceName(data.placeName || "");
         } else {
-          setPlaceId(null);
-          setPlaceName("");
+          setError("No se encontró el documento del usuario.");
         }
       } catch (err) {
         console.error(err);
+        setError("Error al obtener datos del usuario.");
+      } finally {
+        setLoading(false);
       }
     };
-    fetchPlace();
+
+    fetchUserData();
   }, [user]);
 
-  // Obtener turnos del lugar
-  useEffect(() => {
-    if (!placeId) return;
-    const q = query(collection(db, "turnos"), where("placeId", "==", placeId));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const turnsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setPublishedTurns(turnsData);
-    });
-    return () => unsubscribe();
-  }, [placeId]);
+  if (loading) {
+    return (
+      <Box p={3} display="flex" justifyContent="center">
+        <CircularProgress />
+      </Box>
+    );
+  }
 
-  const handleLogout = async () => {
-    await signOut(auth);
-    navigate("/");
-  };
-
-  // Manejo de eliminar slot / turno completo
-  const handleDeleteSlot = async (turn) => {
-    const turnoRef = doc(db, "turnos", turn.id);
-
-    if ((turn.slotsAvailable || turn.slots) > 1) {
-      await updateDoc(turnoRef, {
-        slotsAvailable: (turn.slotsAvailable || turn.slots) - 1
-      });
-    } else {
-      await deleteDoc(turnoRef);
-    }
-  };
-
-  const handleCancelReservation = async (turno, userUid) => {
-    const turnoRef = doc(db, "turnos", turno.id);
-    await updateDoc(turnoRef, {
-      slotsAvailable: (turno.slotsAvailable || turno.slots) + 1,
-      reservations: (turno.reservations || []).filter(uid => uid !== userUid),
-    });
-  };
-
-  // --- Estilos violeta ---
-  const styles = {
-    container: {
-      p: 3,
-      minHeight: "100vh",
-      background: "linear-gradient(135deg, #4e54c8, #8f94fb)",
-      color: "#fff",
-    },
-    card: {
-      background: "#6c63ff",
-      color: "#fff",
-    },
-    buttonPrimary: {
-      mr: 2,
-      backgroundColor: "#fff",
-      color: "#6c63ff",
-      "&:hover": { backgroundColor: "#eee" },
-    },
-    buttonSecondary: {
-      backgroundColor: "#ff6cec",
-      "&:hover": { backgroundColor: "#ff4ed9" },
-    },
-  };
+  if (!user) {
+    return (
+      <Box p={3}>
+        <Alert severity="warning">Iniciá sesión para acceder al dashboard.</Alert>
+      </Box>
+    );
+  }
 
   return (
-    <Box sx={styles.container}>
-      <Typography variant="h4">Dashboard del Lugar</Typography>
-      <Typography sx={{ mt: 2 }}>¡Bienvenido, {user.email}!</Typography>
-      <Typography variant="h6" sx={{ mt: 1 }}>Lugar: {placeName || "—"}</Typography>
+    <Box p={3}>
+      <Typography variant="h5" gutterBottom>
+        Dashboard del Lugar
+      </Typography>
+      <Typography variant="subtitle1" gutterBottom>
+        Bienvenido: {user.email}
+      </Typography>
+      <Typography variant="subtitle1" gutterBottom>
+        Lugar: {placeName || "—"}
+      </Typography>
 
-      <Box sx={{ mt: 3, mb: 3 }}>
-        <Button
-          variant="contained"
-          sx={styles.buttonPrimary}
-          onClick={() => navigate("/publish-turn", { state: { placeId, placeName } })}
-          disabled={!placeId}
-        >
-          Publicar Turnos
-        </Button>
-        <Button variant="contained" sx={styles.buttonSecondary} onClick={handleLogout}>
-          Cerrar Sesión
-        </Button>
-      </Box>
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
-      <Typography variant="h5" sx={{ mt: 4 }}>Tus Turnos Publicados</Typography>
-      {publishedTurns.length === 0 ? (
-        <Typography>No has publicado ningún turno todavía.</Typography>
-      ) : (
-        <Grid container spacing={2}>
-          {publishedTurns.map(turn => (
-            <Grid item xs={12} sm={6} md={4} key={turn.id}>
-              <Card sx={styles.card}>
-                <CardContent>
-                  <Typography variant="h6">Fecha: {turn.date}</Typography>
-                  <Typography>Hora: {turn.time}</Typography>
-                  <Typography>Slots disponibles: {turn.slotsAvailable || turn.slots}</Typography>
-
-                  {turn.reservations && turn.reservations.length > 0 && (
-                    <>
-                      <Typography variant="subtitle2" sx={{ mt: 1 }}>Usuarios Reservados:</Typography>
-                      {turn.reservations.map(uid => (
-                        <Box key={uid} sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mt: 0.5 }}>
-                          <Typography variant="body2">{uid}</Typography>
-                          <Button variant="outlined" color="error" size="small"
-                            onClick={() => handleCancelReservation(turn, uid)}>Cancelar Reserva</Button>
-                        </Box>
-                      ))}
-                    </>
-                  )}
-
-                  <Button variant="contained" color="secondary" sx={{ mt: 1 }}
-                    onClick={() => handleDeleteSlot(turn)}>Eliminar Slot</Button>
-                </CardContent>
-              </Card>
-            </Grid>
-          ))}
-        </Grid>
+      {!placeId && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          No hay un lugar asociado a tu cuenta. Registrá un lugar para poder publicar turnos.
+        </Alert>
       )}
+
+      <Button
+        variant="contained"
+        color="primary"
+        disabled={!placeId}
+        onClick={() => navigate("/publish-turn", { state: { placeId, placeName } })}
+        sx={{ mr: 2 }}
+      >
+        PUBLICAR TURNOS
+      </Button>
+
+      <Button
+        variant="contained"
+        color="secondary"
+        onClick={() => {/* lógica de logout */}}
+      >
+        CERRAR SESIÓN
+      </Button>
+
+      <Box mt={4}>
+        <Typography variant="h6">Tus Turnos Publicados</Typography>
+        {/* Aquí iría la lista de turnos */}
+      </Box>
     </Box>
   );
 }

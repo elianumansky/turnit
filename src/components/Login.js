@@ -1,48 +1,42 @@
-import React, { useState } from 'react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth, db } from '../firebase';
-import { useNavigate } from 'react-router-dom';
-import { Box, TextField, Button, Typography } from '@mui/material';
-import { doc, getDoc } from 'firebase/firestore';
+import React, { useState } from "react";
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { auth } from "../firebase";
+import { TextField, Button, Typography, Box } from "@mui/material";
+import { useNavigate } from "react-router-dom";
 
 export default function Login() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    setError('');
+    setError("");
+    setLoading(true);
+
+    if (!email || !password) {
+      setError("Completa todos los campos");
+      setLoading(false);
+      return;
+    }
 
     try {
-      // Autenticación con Firebase
+      // Iniciar sesión con el mismo auth que usamos en el registro
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
+      console.log("Usuario logueado:", userCredential.user.uid);
 
-      // Obtener documento del usuario en Firestore
-      const userDocRef = doc(db, 'users', user.uid);
-      const userDoc = await getDoc(userDocRef);
-
-      if (!userDoc.exists()) {
-        setError('Usuario no registrado en Firestore');
-        return;
-      }
-
-      const userData = userDoc.data();
-      console.log('Datos del usuario:', userData);
-
-      // Redirección según rol
-      if (userData.role === 'place') {
-        navigate('/place-dashboard');
-      } else if (userData.role === 'user') {
-        navigate('/user-dashboard');
-      } else {
-        setError('Rol de usuario desconocido');
-      }
+      // Redirigir según rol o dashboard
+      navigate("/place-dashboard");
     } catch (err) {
-      console.error('Error al iniciar sesión:', err);
-      setError('Credenciales incorrectas o usuario no registrado.');
+      console.error(err);
+      if (err.code === "auth/user-not-found") setError("No existe una cuenta con este correo.");
+      else if (err.code === "auth/wrong-password") setError("Contraseña incorrecta.");
+      else if (err.code === "auth/invalid-email") setError("Correo inválido.");
+      else setError("Error al iniciar sesión. Revisa tus datos.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -50,73 +44,66 @@ export default function Login() {
     container: {
       minHeight: "100vh",
       display: "flex",
-      flexDirection: "column",
       justifyContent: "center",
       alignItems: "center",
       background: "linear-gradient(135deg, #4e54c8, #8f94fb)",
+      p: 3,
+    },
+    card: {
+      background: "#6c63ff",
+      p: 4,
+      borderRadius: 3,
+      width: 360,
       color: "#fff",
-      textAlign: "center",
-      fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
-      padding: "20px",
+      boxShadow: "0 8px 20px rgba(0,0,0,0.3)",
     },
-    title: {
-      fontSize: "2rem",
-      fontWeight: "bold",
-      marginBottom: "20px",
-    },
-    form: {
-      background: "#fff",
-      padding: "20px",
-      borderRadius: "10px",
-      width: "100%",
-      maxWidth: "350px",
-      color: "#333",
-      display: "flex",
-      flexDirection: "column",
-      gap: "15px",
+    input: {
+      mb: 2,
+      "& .MuiInputBase-root": { color: "#fff" },
+      "& .MuiInputLabel-root": { color: "#ddd" },
+      "& .MuiOutlinedInput-root .MuiOutlinedInput-notchedOutline": { borderColor: "#bbb" },
+      "& .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "#fff" },
     },
     button: {
-      padding: "12px",
-      borderRadius: "8px",
-      border: "none",
-      backgroundColor: "#4e54c8",
-      color: "#fff",
-      fontSize: "1rem",
-      fontWeight: "bold",
-      cursor: "pointer",
-      transition: "all 0.3s ease",
+      mt: 1,
+      backgroundColor: "#fff",
+      color: "#6c63ff",
+      "&:hover": { backgroundColor: "#eee" },
     },
-    error: {
-      color: "red",
-      fontSize: "0.9rem",
-    },
+    errorText: { mb: 2, color: "#ff6b81" },
   };
 
   return (
-    <Box style={styles.container}>
-      <Typography variant="h5" component="h1" style={styles.title}>
-        Iniciar Sesión
-      </Typography>
-      <form onSubmit={handleLogin} style={styles.form}>
-        <TextField
-          label="Email"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
-        <TextField
-          label="Contraseña"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-        {error && <Typography style={styles.error}>{error}</Typography>}
-        <Button variant="contained" type="submit" style={styles.button}>
+    <Box sx={styles.container}>
+      <Box sx={styles.card}>
+        <Typography variant="h5" mb={3} align="center">
           Iniciar Sesión
-        </Button>
-      </form>
+        </Typography>
+        <form onSubmit={handleLogin}>
+          <TextField
+            label="Email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            fullWidth
+            required
+            sx={styles.input}
+          />
+          <TextField
+            label="Contraseña"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            fullWidth
+            required
+            sx={styles.input}
+          />
+          {error && <Typography sx={styles.errorText}>{error}</Typography>}
+          <Button type="submit" variant="contained" fullWidth sx={styles.button} disabled={loading}>
+            {loading ? "Ingresando..." : "Ingresar"}
+          </Button>
+        </form>
+      </Box>
     </Box>
   );
 }
