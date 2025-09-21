@@ -7,6 +7,15 @@ import { auth, db } from "../firebase";
 import { signOut } from "firebase/auth";
 import { collection, query, where, onSnapshot, updateDoc, deleteDoc, doc, getDocs } from "firebase/firestore";
 
+// Calendario
+import { Calendar, dateFnsLocalizer } from "react-big-calendar";
+import { format, parse, startOfWeek, getDay } from "date-fns";
+import "react-big-calendar/lib/css/react-big-calendar.css";
+import es from "date-fns/locale/es";
+
+const locales = { es: es };
+const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales });
+
 export default function PlaceDashboard({ user }) {
   const [publishedTurns, setPublishedTurns] = useState([]);
   const [placeId, setPlaceId] = useState(null);
@@ -17,7 +26,6 @@ export default function PlaceDashboard({ user }) {
   useEffect(() => {
     const fetchPlace = async () => {
       if (!user?.uid) return;
-
       try {
         const q = query(collection(db, "places"), where("ownerId", "==", user.uid));
         const snap = await getDocs(q);
@@ -26,9 +34,6 @@ export default function PlaceDashboard({ user }) {
           const firstPlace = snap.docs[0];
           setPlaceId(firstPlace.id);
           setPlaceName(firstPlace.data().name || "");
-        } else {
-          setPlaceId(null);
-          setPlaceName("");
         }
       } catch (err) {
         console.error(err);
@@ -74,7 +79,20 @@ export default function PlaceDashboard({ user }) {
     });
   };
 
-  // --- Estilos violeta ---
+  // ---------------- Crear eventos para el calendario ----------------
+  const calendarEvents = publishedTurns.map(turn => {
+    const start = new Date(`${turn.date}T${turn.time}:00`);
+    const end = new Date(start.getTime() + 60 * 60 * 1000); // 1 hora por defecto
+    return {
+      id: turn.id,
+      title: `${turn.placeName || "Turno"} (${turn.slotsAvailable || turn.slots} slots)`,
+      start,
+      end,
+      turn,
+    };
+  });
+
+  // ---------------- Estilos violeta ----------------
   const styles = {
     container: {
       p: 3,
@@ -117,6 +135,20 @@ export default function PlaceDashboard({ user }) {
           Cerrar Sesión
         </Button>
       </Box>
+
+      <Typography variant="h5" sx={{ mt: 4, mb: 2 }}>Calendario de Turnos</Typography>
+      <Calendar
+        localizer={localizer}
+        events={calendarEvents}
+        startAccessor="start"
+        endAccessor="end"
+        style={{ height: 500, marginBottom: 20, backgroundColor: "#fff", color: "#000", borderRadius: 8 }}
+        onSelectEvent={(event) => {
+          if (window.confirm(`Eliminar turno de ${event.turn.placeName}?`)) {
+            handleDeleteSlot(event.turn);
+          }
+        }}
+      />
 
       <Typography variant="h5" sx={{ mt: 4 }}>Tus Turnos Publicados</Typography>
       {publishedTurns.length === 0 ? (
