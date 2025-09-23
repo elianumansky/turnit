@@ -1,7 +1,26 @@
 import React, { useEffect, useState } from "react";
-import { collection, query, where, onSnapshot, doc, runTransaction, deleteDoc, getDoc, updateDoc } from "firebase/firestore";
+import {
+  collection,
+  query,
+  where,
+  onSnapshot,
+  doc,
+  runTransaction,
+  deleteDoc,
+  getDoc,
+  updateDoc,
+} from "firebase/firestore";
 import { db, auth } from "../firebase";
-import { Typography, Card, CardContent, Button, Grid, Box, TextField, Chip } from "@mui/material";
+import {
+  Typography,
+  Card,
+  CardContent,
+  Button,
+  Grid,
+  Box,
+  TextField,
+  Chip,
+} from "@mui/material";
 import { signOut } from "firebase/auth";
 import { useNavigate } from "react-router-dom";
 
@@ -57,13 +76,17 @@ export default function UserDashboard({ user }) {
     const unsubscribe = onSnapshot(
       q,
       async (snapshot) => {
-        let turns = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        let turns = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
         await removeExpiredTurns(turns);
 
-        let filtered = turns.filter(t => !(t.reservations?.includes(user.uid)) && new Date(t.dateTime) > new Date());
+        let filtered = turns.filter(
+          (t) =>
+            !(t.reservations?.includes(user.uid)) &&
+            new Date(t.dateTime) > new Date()
+        );
 
-        if (dateFilter) filtered = filtered.filter(t => t.date === dateFilter);
-        if (timeFilter) filtered = filtered.filter(t => t.time === timeFilter);
+        if (dateFilter) filtered = filtered.filter((t) => t.date === dateFilter);
+        if (timeFilter) filtered = filtered.filter((t) => t.time === timeFilter);
 
         setAvailableTurns(filtered);
         setLoadingAvailable(false);
@@ -84,13 +107,18 @@ export default function UserDashboard({ user }) {
   useEffect(() => {
     if (!user) return;
 
-    const q = query(collection(db, "turnos"), where("reservations", "array-contains", user.uid));
+    const q = query(
+      collection(db, "turnos"),
+      where("reservations", "array-contains", user.uid)
+    );
     const unsubscribe = onSnapshot(
       q,
       async (snapshot) => {
-        let turns = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        let turns = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
         await removeExpiredTurns(turns);
-        const futureTurns = turns.filter(t => new Date(t.dateTime) > new Date());
+        const futureTurns = turns.filter(
+          (t) => new Date(t.dateTime) > new Date()
+        );
         setUserTurns(futureTurns);
         setLoadingUserTurns(false);
       },
@@ -114,7 +142,8 @@ export default function UserDashboard({ user }) {
         if (!snap.exists()) throw new Error("Turno inexistente");
         const t = snap.data();
         if (t.slotsAvailable <= 0) throw new Error("No hay cupos disponibles");
-        if (t.reservations?.includes(user.uid)) throw new Error("Ya reservaste este turno");
+        if (t.reservations?.includes(user.uid))
+          throw new Error("Ya reservaste este turno");
 
         tx.update(turnoRef, {
           slotsAvailable: t.slotsAvailable - 1,
@@ -147,11 +176,12 @@ export default function UserDashboard({ user }) {
         const snap = await tx.get(turnoRef);
         if (!snap.exists()) throw new Error("Turno inexistente");
         const t = snap.data();
-        if (!t.reservations?.includes(user.uid)) throw new Error("No tenés reserva en este turno");
+        if (!t.reservations?.includes(user.uid))
+          throw new Error("No tenés reserva en este turno");
 
         tx.update(turnoRef, {
           slotsAvailable: t.slotsAvailable + 1,
-          reservations: t.reservations.filter(uid => uid !== user.uid),
+          reservations: t.reservations.filter((uid) => uid !== user.uid),
         });
       });
       setError("");
@@ -167,7 +197,9 @@ export default function UserDashboard({ user }) {
   const toggleFavorite = async (placeId) => {
     const userRef = doc(db, "users", user.uid);
     const isFav = favorites.includes(placeId);
-    let updated = isFav ? favorites.filter(f => f !== placeId) : [...favorites, placeId];
+    let updated = isFav
+      ? favorites.filter((f) => f !== placeId)
+      : [...favorites, placeId];
     await updateDoc(userRef, { favoritePlaces: updated });
     setFavorites(updated);
   };
@@ -229,10 +261,18 @@ export default function UserDashboard({ user }) {
     <Box sx={styles.container}>
       <Typography variant="h4" gutterBottom>
         Bienvenido {user.displayName || user.email} &nbsp;
-        <Chip label={`Puntos: ${user.points || 0}`} color="secondary" size="small" />
+        <Chip
+          label={`Puntos: ${user.points || 0}`}
+          color="secondary"
+          size="small"
+        />
       </Typography>
 
-      <Button variant="contained" sx={styles.buttonLogout} onClick={handleLogout}>
+      <Button
+        variant="contained"
+        sx={styles.buttonLogout}
+        onClick={handleLogout}
+      >
         Cerrar Sesión
       </Button>
 
@@ -242,20 +282,22 @@ export default function UserDashboard({ user }) {
           label="Filtrar por fecha"
           type="date"
           value={dateFilter}
-          onChange={e => setDateFilter(e.target.value)}
+          onChange={(e) => setDateFilter(e.target.value)}
           InputLabelProps={{ shrink: true }}
         />
         <TextField
           label="Filtrar por hora"
           type="time"
           value={timeFilter}
-          onChange={e => setTimeFilter(e.target.value)}
+          onChange={(e) => setTimeFilter(e.target.value)}
           InputLabelProps={{ shrink: true }}
         />
       </Box>
 
       {/* ---------------- Turnos disponibles ---------------- */}
-      <Typography variant="h5" gutterBottom sx={{ mt: 3 }}>Turnos Disponibles</Typography>
+      <Typography variant="h5" gutterBottom sx={{ mt: 3 }}>
+        Turnos Disponibles
+      </Typography>
       {error && <Typography color="error">{error}</Typography>}
       {loadingAvailable ? (
         <Typography>Cargando turnos disponibles...</Typography>
@@ -263,11 +305,12 @@ export default function UserDashboard({ user }) {
         <Typography>No hay turnos disponibles</Typography>
       ) : (
         <Grid container spacing={2} sx={{ mb: 4 }}>
-          {availableTurns.map(turno => (
+          {availableTurns.map((turno) => (
             <Grid item xs={12} sm={6} md={4} key={turno.id}>
               <Card sx={styles.card}>
                 <CardContent>
-                  <Typography variant="h6">{turno.placeName || "—"} &nbsp;
+                  <Typography variant="h6">
+                    {turno.placeName || "—"} &nbsp;
                     <Chip
                       label={favorites.includes(turno.placeId) ? "★" : "☆"}
                       onClick={() => toggleFavorite(turno.placeId)}
@@ -276,12 +319,17 @@ export default function UserDashboard({ user }) {
                   </Typography>
                   <Typography>Fecha: {turno.date}</Typography>
                   <Typography>Hora: {turno.time}</Typography>
-                  <Typography>Turnos disponibles: {turno.slotsAvailable ?? 0}</Typography>
+                  <Typography>
+                    Turnos disponibles: {turno.slotsAvailable ?? 0}
+                  </Typography>
                   <Button
                     variant="contained"
                     sx={styles.buttonReserve}
                     onClick={() => handleReserve(turno)}
-                    disabled={turno.slotsAvailable <= 0 || turno.reservations?.includes(user.uid)}
+                    disabled={
+                      turno.slotsAvailable <= 0 ||
+                      turno.reservations?.includes(user.uid)
+                    }
                   >
                     Reservar
                   </Button>
@@ -293,21 +341,25 @@ export default function UserDashboard({ user }) {
       )}
 
       {/* ---------------- Turnos reservados por el usuario ---------------- */}
-      <Typography variant="h5" gutterBottom>Mis Turnos Reservados</Typography>
+      <Typography variant="h5" gutterBottom>
+        Mis Turnos Reservados
+      </Typography>
       {loadingUserTurns ? (
         <Typography>Cargando tus turnos...</Typography>
       ) : userTurns.length === 0 ? (
         <Typography>No reservaste turnos</Typography>
       ) : (
         <Grid container spacing={2}>
-          {userTurns.map(turno => (
+          {userTurns.map((turno) => (
             <Grid item xs={12} sm={6} md={4} key={turno.id}>
               <Card sx={styles.card}>
                 <CardContent>
                   <Typography variant="h6">{turno.placeName || "—"}</Typography>
                   <Typography>Fecha: {turno.date}</Typography>
                   <Typography>Hora: {turno.time}</Typography>
-                  <Typography>Turnos disponibles: {turno.slotsAvailable ?? 0}</Typography>
+                  <Typography>
+                    Turnos disponibles: {turno.slotsAvailable ?? 0}
+                  </Typography>
                   <Button
                     variant="contained"
                     sx={styles.buttonCancel}

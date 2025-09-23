@@ -1,25 +1,20 @@
 import React, { useState } from "react";
-import { createUserWithEmailAndPassword } from "firebase/auth";
+import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { TextField, Button, Typography, Box } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 
-// Función para convertir dirección en coordenadas con Nominatim
+// Geocodificar dirección con Nominatim (opcional)
 async function geocodeAddress(address) {
   try {
     const resp = await fetch(
       `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`,
       { headers: { "User-Agent": "TurnIt-App/1.0 (contacto@turnit.com)" } }
     );
-
     const data = await resp.json();
     if (!data || !data[0]) throw new Error("No se pudo geocodificar la dirección");
-
-    return {
-      lat: parseFloat(data[0].lat),
-      lng: parseFloat(data[0].lon),
-    };
+    return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
   } catch (err) {
     console.error("Error al geocodificar:", err);
     return null;
@@ -47,26 +42,32 @@ export default function Register() {
     }
 
     try {
-      // 1) Crear usuario en Firebase Auth
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
+      // 1) Crear usuario en Auth
+      const { user } = await createUserWithEmailAndPassword(auth, email, password);
 
-      // 2) Geocodificar la dirección
+      // 2) Setear displayName en Auth
+      const cleanName = name.trim();
+      if (cleanName.length > 0) {
+        await updateProfile(auth.currentUser, { displayName: cleanName });
+      }
+
+      // 3) Geocodificar dirección (opcional)
       const location = await geocodeAddress(address);
 
-      // 3) Guardar datos del usuario en Firestore
+      // 4) Guardar perfil en Firestore
       await setDoc(doc(db, "users", user.uid), {
         userId: user.uid,
         email: user.email,
-        name,
+        name: cleanName,
         role: "user",
         address,
         location,
-        createdAt: serverTimestamp(), // timestamp seguro de Firebase
+        points: 0,
+        favoritePlaces: [],
+        createdAt: serverTimestamp(),
       });
 
-      console.log("Usuario registrado con éxito ✅");
-      navigate("/user-dashboard"); // redirige al dashboard correcto
+      navigate("/user-dashboard");
     } catch (err) {
       console.error("Error al registrar el usuario:", err);
       if (err.code === "auth/email-already-in-use") {
@@ -91,7 +92,6 @@ export default function Register() {
       background: "linear-gradient(135deg, #4e54c8, #8f94fb)",
       color: "#fff",
       textAlign: "center",
-      fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
       padding: "20px",
     },
     title: { fontSize: "2rem", fontWeight: "bold", marginBottom: "20px" },
