@@ -54,7 +54,6 @@ export default function PublishTurn({ user }) {
     if (!date || !time) return setError("Completá fecha y hora.");
 
     try {
-      // ✅ corregido con template literal
       const dateTimeISO = new Date(`${date}T${time}:00`).toISOString();
 
       // Crear nuevo turno en Firestore
@@ -79,7 +78,7 @@ export default function PublishTurn({ user }) {
     }
   };
 
-  // Función para reservar el turno como usuario normal (ejemplo)
+  // Función para reservar el turno como usuario normal (no se usa acá, queda de ejemplo)
   const handleReserveTurn = async (turno) => {
     if (!user) return setError("Debes iniciar sesión para reservar.");
     const turnoRef = doc(db, "turnos", turno.id);

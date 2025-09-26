@@ -45,10 +45,10 @@ export default function Register() {
       // 1) Crear usuario en Auth
       const { user } = await createUserWithEmailAndPassword(auth, email, password);
 
-      // 2) Setear displayName en Auth
+      // 2) Setear displayName en Auth (CLAVE para que luego salga el nombre al reservar)
       const cleanName = name.trim();
       if (cleanName.length > 0) {
-        await updateProfile(auth.currentUser, { displayName: cleanName });
+        await updateProfile(user, { displayName: cleanName });
       }
 
       // 3) Geocodificar dirección (opcional)
@@ -62,8 +62,6 @@ export default function Register() {
         role: "user",
         address,
         location,
-        points: 0,
-        favoritePlaces: [],
         createdAt: serverTimestamp(),
       });
 

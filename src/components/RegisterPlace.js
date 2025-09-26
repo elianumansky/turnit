@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { doc, setDoc, collection, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
-import { TextField, Button, Typography, Box } from "@mui/material";
+import { TextField, Button, Typography, Box, Select, MenuItem, InputLabel, FormControl, Checkbox, ListItemText } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 
 export default function RegisterPlace() {
@@ -10,17 +10,37 @@ export default function RegisterPlace() {
   const [password, setPassword] = useState("");
   const [placeName, setPlaceName] = useState("");
   const [address, setAddress] = useState("");
+  const [categories, setCategories] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  // Lista de categorías comunes
+  const categoryOptions = [
+    "Peluquería",
+    "Barbería",
+    "Estética / Spa",
+    "Consultorio Médico",
+    "Consultorio Odontológico",
+    "Kinesiología / Fisioterapia",
+    "Veterinaria",
+    "Gimnasio",
+    "Escuela de Danza / Yoga",
+    "Taller Mecánico",
+    "Taller de Motos",
+    "Estudio Jurídico",
+    "Coworking",
+    "Clases Particulares",
+    "Otros Servicios"
+  ];
 
   const handleRegister = async (e) => {
     e.preventDefault();
     setError("");
     setLoading(true);
 
-    if (!email || !password || !placeName || !address) {
-      setError("Completa todos los campos");
+    if (!email || !password || !placeName || !address || categories.length === 0) {
+      setError("Completa todos los campos y selecciona al menos una categoría");
       setLoading(false);
       return;
     }
@@ -41,6 +61,7 @@ export default function RegisterPlace() {
         name: placeName,
         email: user.email,
         address,
+        categories,
         createdAt: serverTimestamp(),
       });
 
@@ -51,6 +72,7 @@ export default function RegisterPlace() {
         role: "place",
         placeId,
         placeName,
+        categories,
         createdAt: serverTimestamp(),
       });
 
@@ -121,6 +143,24 @@ export default function RegisterPlace() {
             required
             sx={styles.input}
           />
+          <FormControl fullWidth sx={styles.input}>
+            <InputLabel id="category-label" sx={{ color: "#ddd" }}>Categorías</InputLabel>
+            <Select
+              labelId="category-label"
+              multiple
+              value={categories}
+              onChange={(e) => setCategories(e.target.value)}
+              renderValue={(selected) => selected.join(", ")}
+              sx={{ color: "#fff" }}
+            >
+              {categoryOptions.map((cat) => (
+                <MenuItem key={cat} value={cat}>
+                  <Checkbox checked={categories.indexOf(cat) > -1} />
+                  <ListItemText primary={cat} />
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
           <TextField
             label="Email"
             type="email"

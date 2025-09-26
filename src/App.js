@@ -1,20 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
 
-// Importa todos tus componentes desde la carpeta 'components'
+import {
+  doc,
+  getDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+} from "firebase/firestore";
+
+// Componentes
 import Start from "./components/Start";
 import Register from "./components/Register";
 import Login from "./components/Login";
 import UserDashboard from "./components/UserDashboard";
 import ReserveTurn from "./components/ReserveTurn";
-import RegisterPlace from './components/RegisterPlace';
+import RegisterPlace from "./components/RegisterPlace";
 import PlaceDashboard from "./components/PlaceDashboard";
-import PublishTurn from "./components/PublishTurn"; // <-- Nuevo componente importado
+import PublishTurn from "./components/PublishTurn";
 import PlacesNearby from "./components/PlacesNearby";
 import PlaceDetail from "./components/PlaceDetail";
+import PlaceProfile from "./components/PlaceProfile"; // <-- NUEVO
 
 function App() {
   const [user, setUser] = useState(null);
@@ -23,16 +32,44 @@ function App() {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        setUser(currentUser);
-        const placeDoc = await getDoc(doc(db, "places", currentUser.uid));
-        setIsPlace(placeDoc.exists());
-      } else {
-        setUser(null);
+      try {
+        if (currentUser) {
+          setUser(currentUser);
+
+          // ✅ Detectar si es dueño o staff del lugar (no por id de doc)
+          let hasPlace = false;
+
+          // Dueño
+          const qOwner = query(
+            collection(db, "places"),
+            where("ownerId", "==", currentUser.uid)
+          );
+          const ownerSnap = await getDocs(qOwner);
+          if (!ownerSnap.empty) hasPlace = true;
+
+          // Staff
+          if (!hasPlace) {
+            const qStaff = query(
+              collection(db, "places"),
+              where("staffIds", "array-contains", currentUser.uid)
+            );
+            const staffSnap = await getDocs(qStaff);
+            if (!staffSnap.empty) hasPlace = true;
+          }
+
+          setIsPlace(hasPlace);
+        } else {
+          setUser(null);
+          setIsPlace(false);
+        }
+      } catch (e) {
+        console.error("Error detectando rol de lugar:", e);
         setIsPlace(false);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     });
+
     return () => unsubscribe();
   }, []);
 
@@ -53,10 +90,16 @@ function App() {
             <Route path="/reserve-turn" element={<ReserveTurn user={user} />} />
             <Route path="/dashboard" element={<UserDashboard user={user} />} />
             <Route path="/place-dashboard" element={<PlaceDashboard user={user} />} />
-            <Route path="/publish-turn" element={<PublishTurn user={user} />} /> {/* <-- Nueva ruta para publicar turnos */}
-            <Route path="*" element={<Navigate to={isPlace ? "/place-dashboard" : "/dashboard"} />} />
+            <Route path="/publish-turn" element={<PublishTurn user={user} />} />
+            <Route path="/place-profile" element={<PlaceProfile user={user} />} /> {/* <-- NUEVA RUTA */}
             <Route path="/lugares" element={<PlacesNearby />} />
             <Route path="/place/:id" element={<PlaceDetail />} />
+
+            {/* Redirección por defecto según rol */}
+            <Route
+              path="*"
+              element={<Navigate to={isPlace ? "/place-dashboard" : "/dashboard"} />}
+            />
           </>
         ) : (
           <Route path="/*" element={<Navigate to="/" />} />
