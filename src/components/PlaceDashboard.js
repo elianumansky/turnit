@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   collection, query, where, onSnapshot, doc, getDocs, getDoc,
-  updateDoc, deleteDoc, runTransaction, addDoc, serverTimestamp
+  updateDoc, runTransaction, addDoc, serverTimestamp
 } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import {
   Box, Typography, Button, Grid, Card, CardContent, Divider, TextField,
   Dialog, DialogTitle, DialogContent, DialogActions, Chip, Stack, IconButton, Tooltip,
-  Snackbar, Alert, Tabs, Tab
+  Snackbar, Alert, Tabs, Tab, MenuItem
 } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
@@ -27,7 +27,7 @@ const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales
 const pad2 = (n) => String(n).padStart(2, "0");
 const yyyymmdd = (d) => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
 const timeToDate = (dateStr, timeStr) => new Date(`${dateStr}T${timeStr}:00`);
-const inRange = (time, start, end) => time >= start && time < end;
+const nowMs = () => new Date().getTime();
 
 // SOLO nombre (sin email)
 function reservationLabel(r, namesByUid) {
@@ -42,11 +42,10 @@ export default function PlaceDashboard({ user }) {
   // place
   const [placeId, setPlaceId] = useState(null);
   const [placeName, setPlaceName] = useState("");
+  const [services, setServices] = useState([]); // servicios flexibles del place
 
   // datos
   const [turns, setTurns] = useState([]);
-  const [blocks, setBlocks] = useState([]);
-  const [capacityRules, setCapacityRules] = useState([]);
   const [selectedDate, setSelectedDate] = useState(new Date());
 
   // reservas
@@ -68,20 +67,24 @@ export default function PlaceDashboard({ user }) {
     const fetchPlace = async () => {
       if (!user?.uid) return;
       try {
+        // dueño
         const qOwner = query(collection(db, "places"), where("ownerId", "==", user.uid));
         const sOwner = await getDocs(qOwner);
         if (!sOwner.empty) {
           const d = sOwner.docs[0];
           setPlaceId(d.id);
           setPlaceName(d.data().name || "");
+          setServices(d.data().services || []);
           return;
         }
+        // staff (lo mantenemos para que el staff pueda ver el panel, pero sin la pestaña "Servicios flexibles")
         const qStaff = query(collection(db, "places"), where("staffIds", "array-contains", user.uid));
         const sStaff = await getDocs(qStaff);
         if (!sStaff.empty) {
           const d = sStaff.docs[0];
           setPlaceId(d.id);
           setPlaceName(d.data().name || "");
+          setServices(d.data().services || []);
           return;
         }
         setToast({ open: true, sev: "error", msg: "No se encontró un lugar asociado a tu cuenta." });
@@ -99,14 +102,26 @@ export default function PlaceDashboard({ user }) {
     const qT = query(collection(db, "turnos"), where("placeId", "==", placeId));
     const unsubT = onSnapshot(qT, (snap) => setTurns(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
 
-    const qB = query(collection(db, "blocks"), where("placeId", "==", placeId));
-    const unsubB = onSnapshot(qB, (snap) => setBlocks(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-
-    const qC = query(collection(db, "capacityRules"), where("placeId", "==", placeId));
-    const unsubC = onSnapshot(qC, (snap) => setCapacityRules(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-
-    return () => { unsubT(); unsubB(); unsubC(); };
+    return () => { unsubT(); };
   }, [placeId]);
+
+  // ----- expirar turnos pasados (best-effort) -----
+  useEffect(() => {
+    if (!turns.length) return;
+    const now = nowMs();
+    // Recorremos y marcamos status=expired para los que ya pasaron
+    turns.forEach(async (t) => {
+      try {
+        if (!t?.date || !t?.time) return;
+        const start = timeToDate(t.date, t.time).getTime();
+        const durationMin = Number(t.durationMinutes || 60);
+        const end = start + durationMin * 60_000;
+        if (end < now && t.status !== "expired") {
+          await updateDoc(doc(db, "turnos", t.id), { status: "expired" });
+        }
+      } catch { /* noop */ }
+    });
+  }, [turns]);
 
   // ----- cache nombres -----
   useEffect(() => {
@@ -143,30 +158,26 @@ export default function PlaceDashboard({ user }) {
     if (!placeId) return [];
     const out = [];
     for (const t of turns) {
+      if (t?.status === "expired") continue; // no mostrar vencidos
       if (!t?.date || !t?.time) continue;
+
       const start = timeToDate(t.date, t.time);
-      const end = addMinutes(start, 60);
+      const durationMin = Number(t.durationMinutes || 60);
+      const end = addMinutes(start, durationMin);
+
       const avail = Number(t.slotsAvailable ?? t.slots ?? 0);
       let title = "Disponible";
       if (avail <= 0) {
         const first = (t.reservations || [])[0];
         title = reservationLabel(first, namesByUid); // SOLO nombre o "Ocupado"
       }
+
       out.push({ id: t.id, title, start, end, type: "turn", turn: t });
     }
-    for (const b of blocks) {
-      if (!b?.date || !b?.startTime || !b?.endTime) continue;
-      const start = timeToDate(b.date, b.startTime);
-      const end = timeToDate(b.date, b.endTime);
-      out.push({ id: `block-${b.id}`, title: `Bloqueado`, start, end, type: "block" });
-    }
     return out;
-  }, [turns, blocks, placeId, namesByUid]);
+  }, [turns, placeId, namesByUid]);
 
   const eventPropGetter = (event) => {
-    if (event.type === "block") {
-      return { style: { backgroundColor: "#9e9e9e", color: "#fff", borderRadius: 8, border: 0 } };
-    }
     const t = event.turn;
     const avail = Number(t?.slotsAvailable ?? t?.slots ?? 0);
     const full = avail <= 0;
@@ -184,12 +195,12 @@ export default function PlaceDashboard({ user }) {
   const dayAgenda = useMemo(() => {
     const day = selectedDate;
     return turns
+      .filter(t => t?.status !== "expired")
       .filter(t => t?.date && isSameDay(timeToDate(t.date, "00:00"), day))
       .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
   }, [turns, selectedDate]);
 
   const onSelectEvent = (ev) => {
-    if (ev.type === "block") { setSelectedDate(ev.start); return; }
     setSelectedDate(ev.start);
     setDialogTurn(ev.turn);
   };
@@ -203,16 +214,20 @@ export default function PlaceDashboard({ user }) {
         if (!snap.exists()) return;
         const t = snap.data();
         if ((t.reservations || []).length > 0 && Number(t.slots) <= 1) {
-          throw new Error("No podés eliminar el último slot porque hay reservas.");
+          throw new Error("No podés eliminar el último cupo porque hay reservas.");
         }
         const newTotal = Math.max(0, Number(t.slots ?? 0) - 1);
         const newAvail = Math.max(0, Math.min(newTotal, Number(t.slotsAvailable ?? 0) - 1));
-        if (newTotal === 0) { await deleteDoc(ref); }
-        else { tx.update(ref, { slots: newTotal, slotsAvailable: newAvail }); }
+        if (newTotal === 0) {
+          // En lugar de borrar, si querés conservar el historial, podés marcar expired
+          await tx.update(ref, { slots: 0, slotsAvailable: 0, status: "expired" });
+        } else {
+          tx.update(ref, { slots: newTotal, slotsAvailable: newAvail });
+        }
       });
-      setToast({ open: true, sev: "success", msg: "Slot eliminado." });
+      setToast({ open: true, sev: "success", msg: "Cupo eliminado." });
     } catch (e) {
-      setToast({ open: true, sev: "error", msg: e.message || "No se pudo eliminar el slot." });
+      setToast({ open: true, sev: "error", msg: e.message || "No se pudo eliminar el cupo." });
     }
   };
 
@@ -306,6 +321,8 @@ export default function PlaceDashboard({ user }) {
   const [recInterval, setRecInterval] = useState(60);
   const [recSlots, setRecSlots] = useState(1);
   const [recDays, setRecDays] = useState({ 1: true, 2: true, 3: true, 4: true, 5: true, 0: false, 6: false });
+  const [recServiceId, setRecServiceId] = useState(""); // opcional: generar fijos con tipo
+  const selectedService = services.find(s => s.id === recServiceId) || null;
 
   const generateFixedTurns = async () => {
     if (!placeId || !recFrom || !recTo) return;
@@ -324,82 +341,91 @@ export default function PlaceDashboard({ user }) {
         const date = yyyymmdd(cur);
         const time = `${pad2(cur.getHours())}:${pad2(cur.getMinutes())}`;
 
-        const blocked = blocks.some(b => b.date === date && inRange(time, b.startTime, b.endTime));
-        if (!blocked) {
-          let slots = Number(recSlots);
-          const rule = capacityRules.find(r => inRange(time, r.startTime, r.endTime));
-          if (rule) slots = Number(rule.slots || slots);
-          const exists = turns.some(t => t.date === date && t.time === time);
-          if (!exists) {
-            await addDoc(collection(db, "turnos"), {
-              userId: user.uid,
-              userName: user.displayName || user.email || "Usuario",
-              placeId,
-              placeName,
-              date,
-              time,
-              dateTime: new Date(`${date}T${time}:00`).toISOString(),
-              slots,
-              slotsAvailable: slots,
-              reservations: [],
-              reservationUids: [],
-              createdAt: serverTimestamp(),
-            });
-            created++;
-          }
+        // no hay bloques/capacidad: generación simple
+        const exists = turns.some(t => t.date === date && t.time === time);
+        if (!exists) {
+          const durationMinutes = Number(selectedService?.durationMinutes || recInterval || 60);
+          await addDoc(collection(db, "turnos"), {
+            userId: user.uid,
+            userName: user.displayName || user.email || "Usuario",
+            placeId,
+            placeName,
+            date,
+            time,
+            dateTime: new Date(`${date}T${time}:00`).toISOString(),
+            serviceId: recServiceId || null,
+            serviceName: selectedService?.name || null,
+            durationMinutes, // clave para expirar y mostrar en calendario
+            slots: Number(recSlots),
+            slotsAvailable: Number(recSlots),
+            reservations: [],
+            reservationUids: [],
+            status: "available",
+            createdAt: serverTimestamp(),
+          });
+          created++;
         }
+
         cur = new Date(cur.getTime() + recInterval * 60000);
       }
     }
     setToast({ open: true, sev: "success", msg: `Turnos creados: ${created}` });
   };
 
-  // ----- Bloques -----
-  const [blkDate, setBlkDate] = useState("");
-  const [blkStart, setBlkStart] = useState("12:00");
-  const [blkEnd, setBlkEnd] = useState("13:00");
-  const addBlock = async () => {
-    if (!placeId || !blkDate || !blkStart || !blkEnd) return;
-    await addDoc(collection(db, "blocks"), {
-      placeId, date: blkDate, startTime: blkStart, endTime: blkEnd, createdAt: serverTimestamp()
+  // ----- Turno manual (nuevo tab) -----
+  const [manDate, setManDate] = useState("");
+  const [manTime, setManTime] = useState("10:00");
+  const [manServiceId, setManServiceId] = useState("");
+  const [manCustomDuration, setManCustomDuration] = useState("");
+  const [manSlots, setManSlots] = useState(1);
+  const canCreateManual = manDate && manTime && Number(manSlots) > 0;
+
+  const createManualTurn = async () => {
+    if (!placeId || !canCreateManual) return;
+    const svc = services.find(s => s.id === manServiceId) || null;
+    const durationMinutes = Number(manCustomDuration || svc?.durationMinutes || 60);
+    const date = manDate;
+    const time = manTime;
+
+    await addDoc(collection(db, "turnos"), {
+      userId: user.uid,
+      userName: user.displayName || user.email || "Usuario",
+      placeId,
+      placeName,
+      date,
+      time,
+      dateTime: new Date(`${date}T${time}:00`).toISOString(),
+      serviceId: manServiceId || null,
+      serviceName: svc?.name || null,
+      durationMinutes,
+      slots: Number(manSlots),
+      slotsAvailable: Number(manSlots),
+      reservations: [],
+      reservationUids: [],
+      status: "available",
+      createdAt: serverTimestamp(),
+      createdBy: "manual"
     });
-    setToast({ open: true, sev: "success", msg: "Bloque agregado." });
+
+    setManDate(""); setManTime("10:00"); setManServiceId(""); setManCustomDuration(""); setManSlots(1);
+    setToast({ open: true, sev: "success", msg: "Turno manual creado." });
   };
 
-  // ----- Capacidad -----
-  const [capStart, setCapStart] = useState("12:00");
-  const [capEnd, setCapEnd] = useState("14:00");
-  const [capSlots, setCapSlots] = useState(2);
-  const addCapacityRule = async () => {
-    if (!placeId || !capStart || !capEnd) return;
-    await addDoc(collection(db, "capacityRules"), {
-      placeId, startTime: capStart, endTime: capEnd, slots: Number(capSlots), createdAt: serverTimestamp()
-    });
-    setToast({ open: true, sev: "success", msg: "Regla de capacidad agregada." });
+  // ----- Servicios flexibles (CRUD simple en places) -----
+  const [svcName, setSvcName] = useState("");
+  const [svcDuration, setSvcDuration] = useState("");
+  const addService = () => {
+    if (!svcName.trim() || Number(svcDuration) <= 0) return;
+    const id = `svc_${Math.random().toString(36).slice(2, 10)}`;
+    setServices(prev => [...prev, { id, name: svcName.trim(), durationMinutes: Number(svcDuration) }]);
+    setSvcName(""); setSvcDuration("");
   };
-
-  // ----- Staff -----
-  const [staffEmail, setStaffEmail] = useState("");
-  const addStaffByEmail = async () => {
-    try {
-      const email = staffEmail.trim().toLowerCase();
-      if (!email || !placeId) return;
-      const q = query(collection(db, "users"), where("email", "==", email));
-      const s = await getDocs(q);
-      if (s.empty) throw new Error("No se encontró un usuario con ese email.");
-      const uid = s.docs[0].id;
-      const pref = doc(db, "places", placeId);
-      const psnap = await getDoc(pref);
-      if (!psnap.exists()) throw new Error("Lugar inexistente.");
-      const data = psnap.data();
-      const staff = Array.isArray(data.staffIds) ? data.staffIds : [];
-      if (staff.includes(uid)) throw new Error("Ese usuario ya es staff.");
-      await updateDoc(pref, { staffIds: [...staff, uid] });
-      setToast({ open: true, sev: "success", msg: "Staff agregado." });
-      setStaffEmail("");
-    } catch (e) {
-      setToast({ open: true, sev: "error", msg: e.message || "No se pudo agregar staff." });
-    }
+  const removeService = (id) => setServices(prev => prev.filter(s => s.id !== id));
+  const saveServices = async () => {
+    if (!placeId) return;
+    const pref = doc(db, "places", placeId);
+    await updateDoc(pref, { services, flexibleEnabled: true });
+    setToast({ open: true, sev: "success", msg: "Servicios guardados." });
   };
 
   const styles = {
@@ -418,14 +444,14 @@ export default function PlaceDashboard({ user }) {
           <Typography variant="subtitle1" sx={{ opacity: 0.9 }}>{placeName || "—"}</Typography>
         </Box>
         <Box sx={{ display: "flex", gap: 1 }}>
-<Button
-  variant="contained"
-  color="warning"
-  sx={{ fontWeight: 700 }}
-  onClick={() => navigate("/place-profile")}
->
-  Editar perfil
-</Button>
+          <Button
+            variant="contained"
+            color="warning"
+            sx={{ fontWeight: 700 }}
+            onClick={() => navigate("/place-profile")}
+          >
+            Editar perfil
+          </Button>
           <Button variant="contained" color="secondary" onClick={async()=>{ await signOut(auth); navigate("/"); }}>
             Cerrar sesión
           </Button>
@@ -437,7 +463,7 @@ export default function PlaceDashboard({ user }) {
         <Grid item xs={12} md={8}>
           <Box sx={styles.panel}>
             <Typography variant="subtitle2" sx={{ mb: 1, opacity: 0.8 }}>
-              Verde: Disponible — Rojo: Completo — Gris: Bloqueado
+              Verde: Disponible — Rojo: Completo
             </Typography>
             <Calendar
               localizer={localizer}
@@ -474,14 +500,17 @@ export default function PlaceDashboard({ user }) {
                   const title = full
                     ? reservationLabel((t.reservations || [])[0], namesByUid) // nombre
                     : "Disponible";
+                  const dur = Number(t.durationMinutes || 60);
                   return (
                     <Card key={t.id} variant="outlined" sx={styles.agendaCard}>
                       <CardContent sx={{ pb: 1.5 }}>
                         <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}>
                           <Box>
-                            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>{t.time}</Typography>
+                            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+                              {t.time} {t.serviceName ? `· ${t.serviceName}` : ""}
+                            </Typography>
                             <Typography variant="body2" color="text.secondary">
-                              {title} · {full ? `Reservas: ${booked}` : `Disponibles: ${avail}`}
+                              {title} · {full ? `Reservas: ${booked}` : `Disponibles: ${avail}`} · {dur} min
                             </Typography>
                           </Box>
                           <Button size="small" variant="contained" onClick={() => setDialogTurn(t)}>Ver</Button>
@@ -502,13 +531,12 @@ export default function PlaceDashboard({ user }) {
         </Grid>
       </Grid>
 
-      {/* Panel inferior: Turnos fijos / Bloques / Capacidad / Staff */}
+      {/* Panel inferior: Turnos fijos / Turno manual / Servicios flexibles */}
       <Box sx={{ mt: 2, ...styles.panel }}>
         <Tabs value={adminTab} onChange={(_, v) => setAdminTab(v)}>
           <Tab label="Turnos fijos" />
-          <Tab label="Bloques" />
-          <Tab label="Capacidad" />
-          <Tab label="Staff" />
+          <Tab label="Agregar turno manual" />
+          <Tab label="Servicios flexibles" />
         </Tabs>
 
         {/* Turnos fijos */}
@@ -532,6 +560,21 @@ export default function PlaceDashboard({ user }) {
               </Grid>
               <Grid item xs={12} md={2}>
                 <TextField label="Cupos" type="number" value={recSlots} onChange={e=>setRecSlots(Number(e.target.value||1))} fullWidth />
+              </Grid>
+
+              <Grid item xs={12} md={4}>
+                <TextField
+                  select
+                  label="Tipo de servicio (opcional)"
+                  value={recServiceId}
+                  onChange={(e)=>setRecServiceId(e.target.value)}
+                  fullWidth
+                >
+                  <MenuItem value="">(Sin tipo)</MenuItem>
+                  {services.map(s => (
+                    <MenuItem key={s.id} value={s.id}>{s.name} ({s.durationMinutes} min)</MenuItem>
+                  ))}
+                </TextField>
               </Grid>
             </Grid>
 
@@ -557,56 +600,78 @@ export default function PlaceDashboard({ user }) {
           </Box>
         )}
 
-        {/* Bloques */}
+        {/* Agregar turno manual */}
         {adminTab === 1 && (
           <Box sx={{ mt: 2 }}>
             <Grid container spacing={2}>
-              <Grid item xs={12} md={4}>
-                <TextField label="Fecha" type="date" value={blkDate} onChange={e=>setBlkDate(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
+              <Grid item xs={12} md={3}>
+                <TextField label="Fecha" type="date" value={manDate} onChange={e=>setManDate(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
               </Grid>
-              <Grid item xs={12} md={4}>
-                <TextField label="Inicio" type="time" value={blkStart} onChange={e=>setBlkStart(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
+              <Grid item xs={12} md={3}>
+                <TextField label="Hora" type="time" value={manTime} onChange={e=>setManTime(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
               </Grid>
-              <Grid item xs={12} md={4}>
-                <TextField label="Fin" type="time" value={blkEnd} onChange={e=>setBlkEnd(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
+              <Grid item xs={12} md={3}>
+                <TextField
+                  select
+                  label="Tipo de servicio"
+                  value={manServiceId}
+                  onChange={e=>setManServiceId(e.target.value)}
+                  fullWidth
+                >
+                  <MenuItem value="">(Sin tipo)</MenuItem>
+                  {services.map(s => (
+                    <MenuItem key={s.id} value={s.id}>{s.name} ({s.durationMinutes} min)</MenuItem>
+                  ))}
+                </TextField>
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <TextField label="Duración custom (min)" type="number" value={manCustomDuration} onChange={e=>setManCustomDuration(e.target.value)} fullWidth />
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <TextField label="Cupos" type="number" value={manSlots} onChange={e=>setManSlots(Number(e.target.value||1))} fullWidth />
               </Grid>
             </Grid>
-            <Button sx={{ mt: 2 }} variant="contained" onClick={addBlock}>Agregar bloqueo</Button>
+
+            <Button sx={{ mt: 2 }} variant="contained" disabled={!canCreateManual} onClick={createManualTurn}>
+              Crear turno manual
+            </Button>
           </Box>
         )}
 
-        {/* Capacidad */}
+        {/* Servicios flexibles */}
         {adminTab === 2 && (
           <Box sx={{ mt: 2 }}>
             <Grid container spacing={2}>
               <Grid item xs={12} md={4}>
-                <TextField label="Inicio" type="time" value={capStart} onChange={e=>setCapStart(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
+                <TextField label="Nombre del servicio" value={svcName} onChange={e=>setSvcName(e.target.value)} fullWidth />
               </Grid>
-              <Grid item xs={12} md={4}>
-                <TextField label="Fin" type="time" value={capEnd} onChange={e=>setCapEnd(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
+              <Grid item xs={12} md={3}>
+                <TextField label="Duración (min)" type="number" value={svcDuration} onChange={e=>setSvcDuration(e.target.value)} fullWidth />
               </Grid>
-              <Grid item xs={12} md={4}>
-                <TextField label="Cupos" type="number" value={capSlots} onChange={e=>setCapSlots(Number(e.target.value||1))} fullWidth />
+              <Grid item xs={12} md={3}>
+                <Button variant="contained" sx={{ height: "100%" }} onClick={addService}>Agregar</Button>
               </Grid>
             </Grid>
-            <Button sx={{ mt: 2 }} variant="contained" onClick={addCapacityRule}>Agregar regla</Button>
-          </Box>
-        )}
 
-        {/* Staff */}
-        {adminTab === 3 && (
-          <Box sx={{ mt: 2 }}>
-            <Grid container spacing={2}>
-              <Grid item xs={12} md={6}>
-                <TextField label="Email del staff" type="email" value={staffEmail} onChange={e=>setStaffEmail(e.target.value)} fullWidth />
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <Button variant="contained" sx={{ height: "100%" }} onClick={addStaffByEmail}>Agregar</Button>
-              </Grid>
-            </Grid>
-            <Typography variant="body2" sx={{ mt: 1, opacity: 0.7 }}>
-              Los usuarios agregados como staff podrán gestionar turnos en este lugar.
-            </Typography>
+            <Divider sx={{ my: 2 }} />
+
+            {services.length === 0 ? (
+              <Typography color="text.secondary">Aún no hay servicios.</Typography>
+            ) : (
+              <Stack spacing={1}>
+                {services.map(s => (
+                  <Stack key={s.id} direction="row" spacing={2} alignItems="center">
+                    <Typography sx={{ minWidth: 240 }}>{s.name}</Typography>
+                    <Typography>{s.durationMinutes} min</Typography>
+                    <IconButton onClick={() => removeService(s.id)} aria-label="Eliminar">
+                      <DeleteOutlineIcon />
+                    </IconButton>
+                  </Stack>
+                ))}
+              </Stack>
+            )}
+
+            <Button sx={{ mt: 2 }} variant="contained" onClick={saveServices}>Guardar cambios</Button>
           </Box>
         )}
       </Box>
@@ -619,6 +684,8 @@ export default function PlaceDashboard({ user }) {
             <>
               <Typography><strong>Fecha:</strong> {dialogTurn.date}</Typography>
               <Typography><strong>Hora:</strong> {dialogTurn.time}</Typography>
+              {dialogTurn.serviceName && <Typography><strong>Servicio:</strong> {dialogTurn.serviceName}</Typography>}
+              <Typography><strong>Duración:</strong> {Number(dialogTurn.durationMinutes || 60)} min</Typography>
               <Typography><strong>Cupos totales:</strong> {dialogTurn.slots}</Typography>
               <Typography><strong>Cupos disponibles:</strong> {dialogTurn.slotsAvailable ?? dialogTurn.slots}</Typography>
 
@@ -682,13 +749,13 @@ export default function PlaceDashboard({ user }) {
         </DialogContent>
         <DialogActions>
           {dialogTurn && (
-            <Tooltip title="Quitar 1 cupo (si queda en 0 y sin reservas, elimina el turno)">
+            <Tooltip title="Quitar 1 cupo (si queda en 0, marca el turno como expirado)">
               <Button color="error" startIcon={<DeleteOutlineIcon />} onClick={async () => {
                 await handleDeleteSlot(dialogTurn);
                 const refreshed = turns.find(t => t.id === dialogTurn.id);
                 if (!refreshed) setDialogTurn(null); else setDialogTurn(refreshed);
               }}>
-                Eliminar slot
+                Eliminar cupo
               </Button>
             </Tooltip>
           )}

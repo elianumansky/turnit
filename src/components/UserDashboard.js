@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   collection, query, where, onSnapshot, doc, runTransaction,
-  getDoc, updateDoc, deleteDoc
+  getDoc, updateDoc
 } from "firebase/firestore";
 import { db, auth } from "../firebase";
 import {
@@ -20,13 +20,51 @@ import "react-big-calendar/lib/css/react-big-calendar.css";
 
 const locales = { es };
 const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales });
+
 const timeToDate = (dateStr, timeStr) => new Date(`${dateStr}T${timeStr}:00`);
+
+// helpers distancia (si hay lat/lng en el place)
+const haversineKm = (a, b) => {
+  if (!a || !b) return null;
+  const R = 6371;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLon = (b.lng - a.lng) * Math.PI / 180;
+  const lat1 = a.lat * Math.PI / 180;
+  const lat2 = b.lat * Math.PI / 180;
+  const x = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
+};
+
+// helpers de turnos (duración/expiración)
+const getDurationMin = (t) => Number(t?.durationMinutes || 60);
+const getEndDate = (t) => {
+  if (!t?.date || !t?.time) return null;
+  const start = timeToDate(t.date, t.time);
+  return addMinutes(start, getDurationMin(t));
+};
+const isFutureTurn = (t) => {
+  if (t?.status === "expired") return false;
+  const end = getEndDate(t);
+  if (!end) return true; // por compatibilidad, si no hay fecha/hora no lo filtro
+  return end.getTime() >= Date.now();
+};
 
 export default function UserDashboard({ user }) {
   const navigate = useNavigate();
 
   // Tabs
   const [tab, setTab] = useState(0);
+
+  // Geolocalización (para distancia)
+  const [myCoords, setMyCoords] = useState(null);
+  useEffect(() => {
+    if (!("geolocation" in navigator)) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => setMyCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => {}, // silencio si rechaza
+      { enableHighAccuracy: false, maximumAge: 300000, timeout: 5000 }
+    );
+  }, []);
 
   // Buscador y filtro
   const [search, setSearch] = useState("");
@@ -39,23 +77,13 @@ export default function UserDashboard({ user }) {
   const [selectedPlace, setSelectedPlace] = useState(null);
 
   const [placeTurns, setPlaceTurns] = useState([]);
-  const [blocks, setBlocks] = useState([]);
+  const [blocks, setBlocks] = useState([]); // lo dejo por compatibilidad
   const [myTurns, setMyTurns] = useState([]);
   const [loadingMyTurns, setLoadingMyTurns] = useState(true);
   const [favorites, setFavorites] = useState([]);
 
   const [confirmTurn, setConfirmTurn] = useState(null);
   const [toast, setToast] = useState({ open: false, msg: "", sev: "success" });
-
-  // Limpieza de turnos expirados
-  const removeExpiredTurns = async (turns) => {
-    const now = new Date();
-    for (const t of turns) {
-      try {
-        if (t?.dateTime && new Date(t.dateTime) < now) await deleteDoc(doc(db, "turnos", t.id));
-      } catch (_) {}
-    }
-  };
 
   // Cargar favoritos
   useEffect(() => {
@@ -80,16 +108,15 @@ export default function UserDashboard({ user }) {
     return () => unsub();
   }, []);
 
-  // Lugares con turnos futuros
+  // Lugares con turnos futuros (no cuento expirados)
   useEffect(() => {
     const qTurns = query(collection(db, "turnos"));
     const unsub = onSnapshot(qTurns, (snap) => {
-      const now = new Date();
       const setIds = new Set();
       for (const d of snap.docs) {
         const t = d.data();
         if (!t?.placeId) continue;
-        if (!t.dateTime || new Date(t.dateTime) >= now) setIds.add(t.placeId);
+        if (isFutureTurn(t)) setIds.add(t.placeId);
       }
       setPlaceIdsWithTurns(setIds);
       if (!selectedPlace && places.length) {
@@ -98,17 +125,16 @@ export default function UserDashboard({ user }) {
       }
     });
     return () => unsub();
-  }, [places, favorites]);
+  }, [places, favorites]); // eslint-disable-line
 
-  // Suscripción turnos del lugar seleccionado
+  // Suscripción turnos del lugar seleccionado (solo vigentes)
   useEffect(() => {
     if (!selectedPlace?.id) { setPlaceTurns([]); setBlocks([]); return; }
 
     const qT = query(collection(db, "turnos"), where("placeId", "==", selectedPlace.id));
     const unsubT = onSnapshot(qT, async (snap) => {
       const turns = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      await removeExpiredTurns(turns);
-      setPlaceTurns(turns.filter(t => !t?.dateTime || new Date(t.dateTime) > new Date()));
+      setPlaceTurns(turns.filter(isFutureTurn));
     });
 
     const qB = query(collection(db, "blocks"), where("placeId", "==", selectedPlace.id));
@@ -119,15 +145,14 @@ export default function UserDashboard({ user }) {
     return () => { unsubT(); unsubB(); };
   }, [selectedPlace?.id]);
 
-  // Mis turnos
+  // Mis turnos (solo vigentes)
   useEffect(() => {
     if (!user?.uid) return;
     setLoadingMyTurns(true);
     const qMine = query(collection(db, "turnos"), where("reservationUids", "array-contains", user.uid));
     const unsub = onSnapshot(qMine, async (snap) => {
       const turns = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      await removeExpiredTurns(turns);
-      setMyTurns(turns.filter(t => !t?.dateTime || new Date(t.dateTime) > new Date()));
+      setMyTurns(turns.filter(isFutureTurn));
       setLoadingMyTurns(false);
     }, () => setLoadingMyTurns(false));
     return () => unsub();
@@ -135,16 +160,19 @@ export default function UserDashboard({ user }) {
 
   const displayPlaceName = (turn) => turn.placeName || placeNameById[turn.placeId] || "—";
 
-  // Eventos calendario
+  // Eventos calendario (usa durationMinutes)
   const calendarEvents = useMemo(() => {
     if (!selectedPlace) return [];
     const out = [];
     for (const t of placeTurns) {
       if (!t?.date || !t?.time) continue;
       const start = timeToDate(t.date, t.time);
-      const end = addMinutes(start, 60);
+      const end = addMinutes(start, getDurationMin(t));
       const avail = Number(t.slotsAvailable ?? t.slots ?? 0);
-      out.push({ id: t.id, title: avail > 0 ? "Disponible" : "Ocupado", start, end, type: "turn", turn: t });
+      const title = avail > 0
+        ? (t.serviceName ? `${t.serviceName} · Disponible` : "Disponible")
+        : (t.serviceName ? `${t.serviceName} · Ocupado` : "Ocupado");
+      out.push({ id: t.id, title, start, end, type: "turn", turn: t });
     }
     for (const b of blocks) {
       if (!b?.date || !b?.startTime || !b?.endTime) continue;
@@ -202,8 +230,13 @@ export default function UserDashboard({ user }) {
         const snap = await transaction.get(ref);
         if (!snap.exists()) throw new Error("El turno ya no existe.");
         const data = snap.data();
+
+        // Re-chequeo de expiración por si cambió en paralelo
+        if (!isFutureTurn(data)) throw new Error("El turno ya expiró.");
+
         const avail = Number(data.slotsAvailable ?? data.slots ?? 0);
         if (avail <= 0) throw new Error("El turno ya fue reservado.");
+
         transaction.update(ref, {
           slotsAvailable: avail - 1,
           reservationUids: [...(data.reservationUids || []), user.uid],
@@ -233,6 +266,16 @@ export default function UserDashboard({ user }) {
     } catch (err) {
       setToast({ open: true, msg: err.message, sev: "error" });
     }
+  };
+
+  // chip de distancia por place (si hay coords y place.location.lat/lng)
+  const placeDistanceChip = (p) => {
+    const loc = p?.location;
+    if (!myCoords || !loc?.lat || !loc?.lng) return null;
+    const km = haversineKm(myCoords, { lat: Number(loc.lat), lng: Number(loc.lng) });
+    if (km == null) return null;
+    const txt = km < 1 ? `${(km*1000).toFixed(0)} m` : `${km.toFixed(1)} km`;
+    return <Chip label={txt} size="small" color="success" sx={{ ml: 0.5 }} />;
   };
 
   return (
@@ -289,7 +332,9 @@ export default function UserDashboard({ user }) {
                   >
                     {p.photoUrl && <CardMedia component="img" height="140" image={p.photoUrl} alt={p.name || "Lugar"} />}
                     <CardContent>
-                      <Typography variant="h6">{p.name || "—"}</Typography>
+                      <Typography variant="h6">
+                        {p.name || "—"} {placeDistanceChip(p)}
+                      </Typography>
                       {p.categories?.map((cat) => (
                         <Chip key={cat} label={cat} size="small" color="info" sx={{ mb: 0.5, mr: 0.5 }} />
                       ))}
@@ -299,6 +344,7 @@ export default function UserDashboard({ user }) {
                         onClick={(e) => { e.stopPropagation(); toggleFavorite(p.id); }}
                         color={favorites.includes(p.id) ? "warning" : "default"}
                         size="small"
+                        sx={{ mt: 1 }}
                       />
                     </CardContent>
                   </Card>
@@ -340,8 +386,10 @@ export default function UserDashboard({ user }) {
                   <Card sx={styles.card}>
                     <CardContent>
                       <Typography variant="h6">{displayPlaceName(turno)}</Typography>
+                      {turno.serviceName && <Typography>Servicio: {turno.serviceName}</Typography>}
                       <Typography>Fecha: {turno.date}</Typography>
                       <Typography>Hora: {turno.time}</Typography>
+                      <Typography>Duración: {getDurationMin(turno)} min</Typography>
                       <Button variant="contained" sx={styles.buttonCancel} onClick={() => handleCancel(turno)}>
                         Cancelar turno
                       </Button>
@@ -392,16 +440,19 @@ export default function UserDashboard({ user }) {
                   <Card sx={styles.placeCard} onClick={() => setSelectedPlace(p)}>
                     {p.photoUrl && <CardMedia component="img" height="140" image={p.photoUrl} />}
                     <CardContent>
-                      <Typography variant="h6">{p.name}</Typography>
+                      <Typography variant="h6">
+                        {p.name} {placeDistanceChip(p)}
+                      </Typography>
                       {p.categories?.map((cat) => (
                         <Chip key={cat} label={cat} size="small" color="info" sx={{ mb: 0.5, mr: 0.5 }} />
                       ))}
-                                            {p.description && <Typography variant="body2">{p.description}</Typography>}
+                      {p.description && <Typography variant="body2">{p.description}</Typography>}
                       <Chip
                         label="Quitar de favoritos"
                         onClick={(e) => { e.stopPropagation(); toggleFavorite(p.id); }}
                         color="warning"
                         size="small"
+                        sx={{ mt: 1 }}
                       />
                     </CardContent>
                   </Card>
@@ -419,8 +470,10 @@ export default function UserDashboard({ user }) {
           {confirmTurn && (
             <>
               <Typography>Lugar: {confirmTurn.placeName || placeNameById[confirmTurn.placeId]}</Typography>
+              {confirmTurn.serviceName && <Typography>Servicio: {confirmTurn.serviceName}</Typography>}
               <Typography>Fecha: {confirmTurn.date}</Typography>
               <Typography>Hora: {confirmTurn.time}</Typography>
+              <Typography>Duración: {getDurationMin(confirmTurn)} min</Typography>
             </>
           )}
         </DialogContent>
