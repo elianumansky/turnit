@@ -1,18 +1,17 @@
+// PlaceDashboard.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import {
   collection, query, where, onSnapshot, doc, getDocs, getDoc,
-  updateDoc, runTransaction, addDoc, serverTimestamp
+  updateDoc, addDoc, serverTimestamp, deleteDoc, runTransaction
 } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import {
   Box, Typography, Button, Grid, Card, CardContent, Divider, TextField,
-  Dialog, DialogTitle, DialogContent, DialogActions, Chip, Stack, IconButton, Tooltip,
-  Snackbar, Alert, Tabs, Tab, MenuItem
+  Snackbar, Alert, Tabs, Tab, MenuItem, RadioGroup, FormControlLabel, Radio,
+  Stack, Dialog, DialogTitle, DialogContent, DialogActions, Chip
 } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 import { signOut } from "firebase/auth";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
-import PersonRemoveIcon from "@mui/icons-material/PersonRemove";
 
 // Calendario
 import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
@@ -28,33 +27,20 @@ const pad2 = (n) => String(n).padStart(2, "0");
 const yyyymmdd = (d) => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
 const timeToDate = (dateStr, timeStr) => new Date(`${dateStr}T${timeStr}:00`);
 const nowMs = () => new Date().getTime();
-
-// SOLO nombre (sin email)
-function reservationLabel(r, namesByUid) {
-  if (typeof r === "string") return namesByUid[r] || "Ocupado";
-  if (r && typeof r === "object") return r.name || namesByUid[r.uid] || "Ocupado";
-  return "Ocupado";
-}
+const getDurationMin = (t) => Number(t?.durationMinutes || 60);
 
 export default function PlaceDashboard({ user }) {
   const navigate = useNavigate();
 
   // place
   const [placeId, setPlaceId] = useState(null);
-  const [placeName, setPlaceName] = useState("");
-  const [services, setServices] = useState([]); // servicios flexibles del place
+  const [place, setPlace] = useState(null);
+  const [selectedEvent, setSelectedEvent] = useState(null);
+
 
   // datos
   const [turns, setTurns] = useState([]);
   const [selectedDate, setSelectedDate] = useState(new Date());
-
-  // reservas
-  const [dialogTurn, setDialogTurn] = useState(null);
-  const [manualName, setManualName] = useState("");
-  const [clientEmail, setClientEmail] = useState("");
-
-  // cache nombres
-  const [namesByUid, setNamesByUid] = useState({});
 
   // notifs
   const [toast, setToast] = useState({ open: false, sev: "success", msg: "" });
@@ -62,60 +48,60 @@ export default function PlaceDashboard({ user }) {
   // panel inferior
   const [adminTab, setAdminTab] = useState(0);
 
-  // ----- obtener lugar (dueño o staff) -----
+  // diálogo (ver turno + reserva manual)
+  const [dialogTurn, setDialogTurn] = useState(null);
+  const [manualName, setManualName] = useState("");
+  const [manualServiceId, setManualServiceId] = useState("");
+  const [manualOptionId, setManualOptionId] = useState(""); // flex: duración+precio
+
+  // ===== CARGA DE LUGAR (solo dueño) =====
   useEffect(() => {
     const fetchPlace = async () => {
       if (!user?.uid) return;
       try {
-        // dueño
         const qOwner = query(collection(db, "places"), where("ownerId", "==", user.uid));
         const sOwner = await getDocs(qOwner);
-        if (!sOwner.empty) {
-          const d = sOwner.docs[0];
-          setPlaceId(d.id);
-          setPlaceName(d.data().name || "");
-          setServices(d.data().services || []);
+        if (sOwner.empty) {
+          setToast({ open: true, sev: "error", msg: "No se encontró un lugar asociado a tu cuenta." });
           return;
         }
-        // staff (lo mantenemos para que el staff pueda ver el panel, pero sin la pestaña "Servicios flexibles")
-        const qStaff = query(collection(db, "places"), where("staffIds", "array-contains", user.uid));
-        const sStaff = await getDocs(qStaff);
-        if (!sStaff.empty) {
-          const d = sStaff.docs[0];
-          setPlaceId(d.id);
-          setPlaceName(d.data().name || "");
-          setServices(d.data().services || []);
-          return;
-        }
-        setToast({ open: true, sev: "error", msg: "No se encontró un lugar asociado a tu cuenta." });
-      } catch (e) {
+        const d = sOwner.docs[0];
+        setPlaceId(d.id);
+        setPlace({ id: d.id, ...d.data() });
+      } catch {
         setToast({ open: true, sev: "error", msg: "Error cargando tu lugar." });
       }
     };
     fetchPlace();
   }, [user]);
 
-  // ----- subs -----
+  // Suscripción a place (para ver cambios en vivo)
   useEffect(() => {
     if (!placeId) return;
+    const pref = doc(db, "places", placeId);
+    const unsub = onSnapshot(pref, (snap) => {
+      if (snap.exists()) setPlace({ id: snap.id, ...snap.data() });
+    });
+    return () => unsub();
+  }, [placeId]);
 
+  // Turnos del lugar
+  useEffect(() => {
+    if (!placeId) return;
     const qT = query(collection(db, "turnos"), where("placeId", "==", placeId));
     const unsubT = onSnapshot(qT, (snap) => setTurns(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-
     return () => { unsubT(); };
   }, [placeId]);
 
-  // ----- expirar turnos pasados (best-effort) -----
+  // Expirar turnos
   useEffect(() => {
     if (!turns.length) return;
     const now = nowMs();
-    // Recorremos y marcamos status=expired para los que ya pasaron
     turns.forEach(async (t) => {
       try {
         if (!t?.date || !t?.time) return;
         const start = timeToDate(t.date, t.time).getTime();
-        const durationMin = Number(t.durationMinutes || 60);
-        const end = start + durationMin * 60_000;
+        const end = start + getDurationMin(t) * 60_000;
         if (end < now && t.status !== "expired") {
           await updateDoc(doc(db, "turnos", t.id), { status: "expired" });
         }
@@ -123,59 +109,28 @@ export default function PlaceDashboard({ user }) {
     });
   }, [turns]);
 
-  // ----- cache nombres -----
-  useEffect(() => {
-    const uids = new Set();
-    for (const t of turns) {
-      if (Array.isArray(t.reservations)) {
-        for (const r of t.reservations) {
-          if (typeof r === "string") uids.add(r);
-          else if (r?.uid) uids.add(r.uid);
-        }
-      }
-    }
-    const missing = [...uids].filter((uid) => !namesByUid[uid]);
-    if (missing.length === 0) return;
-    (async () => {
-      const updates = {};
-      for (const uid of missing) {
-        try {
-          const uref = doc(db, "users", uid);
-          const usnap = await getDoc(uref);
-          updates[uid] = usnap.exists()
-            ? (usnap.data().name || usnap.data().fullName || "Ocupado")
-            : "Ocupado";
-        } catch {
-          updates[uid] = "Ocupado";
-        }
-      }
-      setNamesByUid((p) => ({ ...p, ...updates }));
-    })();
-  }, [turns]);
-
-  // ----- eventos calendario -----
+  // ===== Calendario / Agenda =====
   const events = useMemo(() => {
     if (!placeId) return [];
     const out = [];
     for (const t of turns) {
-      if (t?.status === "expired") continue; // no mostrar vencidos
+      if (t?.status === "expired") continue;
       if (!t?.date || !t?.time) continue;
-
       const start = timeToDate(t.date, t.time);
-      const durationMin = Number(t.durationMinutes || 60);
-      const end = addMinutes(start, durationMin);
-
+      const end = addMinutes(start, getDurationMin(t));
       const avail = Number(t.slotsAvailable ?? t.slots ?? 0);
-      let title = "Disponible";
-      if (avail <= 0) {
-        const first = (t.reservations || [])[0];
-        title = reservationLabel(first, namesByUid); // SOLO nombre o "Ocupado"
-      }
-
-      out.push({ id: t.id, title, start, end, type: "turn", turn: t });
+      out.push({
+        id: t.id,
+        title: avail > 0 ? "Disponible" : "Ocupado",
+        start, end, type: "turn", turn: t
+      });
     }
     return out;
-  }, [turns, placeId, namesByUid]);
+  }, [turns, placeId]);
+  const handleSelectEvent = (event) => {
+  setSelectedEvent(event);
+};
+
 
   const eventPropGetter = (event) => {
     const t = event.turn;
@@ -191,6 +146,29 @@ export default function PlaceDashboard({ user }) {
       }
     };
   };
+  // ===== Cancelar reserva =====
+const handleCancelReservation = async (turnId, reservationUid) => {
+  try {
+    const ref = doc(db, "turnos", turnId);
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error("Turno inexistente");
+      const t = snap.data();
+
+      const reservations = (t.reservations || []).filter(r => r.uid !== reservationUid);
+      const slotsAvailable = Number(t.slots ?? 1) - reservations.length;
+
+      tx.update(ref, {
+        reservations,
+        slotsAvailable: slotsAvailable < 0 ? 0 : slotsAvailable
+      });
+    });
+    setToast({ open: true, sev: "success", msg: "Reserva cancelada." });
+  } catch (e) {
+    setToast({ open: true, sev: "error", msg: e.message || "No se pudo cancelar la reserva." });
+  }
+};
+
 
   const dayAgenda = useMemo(() => {
     const day = selectedDate;
@@ -200,248 +178,466 @@ export default function PlaceDashboard({ user }) {
       .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
   }, [turns, selectedDate]);
 
-  const onSelectEvent = (ev) => {
-    setSelectedDate(ev.start);
-    setDialogTurn(ev.turn);
-  };
+  // ===== UI STATE para generar disponibilidad =====
+  const [schedulingMode, setSchedulingMode] = useState("fixed"); // "fixed" | "flex"
+  const [depositPercent, setDepositPercent] = useState(0);
 
-  // ----- acciones reserva -----
-  const handleDeleteSlot = async (turn) => {
-    try {
-      const ref = doc(db, "turnos", turn.id);
-      await runTransaction(db, async (tx) => {
-        const snap = await tx.get(ref);
-        if (!snap.exists()) return;
-        const t = snap.data();
-        if ((t.reservations || []).length > 0 && Number(t.slots) <= 1) {
-          throw new Error("No podés eliminar el último cupo porque hay reservas.");
-        }
-        const newTotal = Math.max(0, Number(t.slots ?? 0) - 1);
-        const newAvail = Math.max(0, Math.min(newTotal, Number(t.slotsAvailable ?? 0) - 1));
-        if (newTotal === 0) {
-          // En lugar de borrar, si querés conservar el historial, podés marcar expired
-          await tx.update(ref, { slots: 0, slotsAvailable: 0, status: "expired" });
-        } else {
-          tx.update(ref, { slots: newTotal, slotsAvailable: newAvail });
-        }
-      });
-      setToast({ open: true, sev: "success", msg: "Cupo eliminado." });
-    } catch (e) {
-      setToast({ open: true, sev: "error", msg: e.message || "No se pudo eliminar el cupo." });
-    }
-  };
+  // Rango común
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [startTime, setStartTime] = useState("10:00");
+  const [endTime, setEndTime] = useState("20:00");
 
-  const handleCancelReservation = async (turn, reservation) => {
-    try {
-      const ref = doc(db, "turnos", turn.id);
-      await runTransaction(db, async (tx) => {
-        const snap = await tx.get(ref);
-        if (!snap.exists()) throw new Error("Turno inexistente");
-        const t = snap.data();
-        const uid = typeof reservation === "string" ? reservation : (reservation?.uid || "");
-        const oldRes = Array.isArray(t.reservations) ? t.reservations : [];
-        const oldUids = Array.isArray(t.reservationUids) ? t.reservationUids : [];
-        const before = oldRes.length;
-        const reservations = oldRes.filter(r => (typeof r === "string" ? r : r?.uid) !== uid);
-        const removed = before - reservations.length;
-        if (removed <= 0) return;
-        const reservationUids = uid ? oldUids.filter(u => u !== uid) : oldUids;
-        tx.update(ref, {
-          reservations,
-          reservationUids,
-          slotsAvailable: (Number(t.slotsAvailable ?? 0)) + removed
-        });
-      });
-      setToast({ open: true, sev: "success", msg: "Reserva cancelada." });
-    } catch (e) {
-      setToast({ open: true, sev: "error", msg: e.message || "No se pudo cancelar." });
-    }
-  };
+  // FIXED
+  const [fixedSlotDuration, setFixedSlotDuration] = useState(60); // minutos
+  const [fixedSlots, setFixedSlots] = useState(1);
+  const [fixedServiceId, setFixedServiceId] = useState("");
 
-  const handleAddManualReservation = async () => {
-    try {
-      const name = manualName.trim();
-      if (!dialogTurn || !name) return;
-      const ref = doc(db, "turnos", dialogTurn.id);
-      await runTransaction(db, async (tx) => {
-        const snap = await tx.get(ref);
-        if (!snap.exists()) throw new Error("Turno inexistente");
-        const t = snap.data();
-        const avail = Number(t.slotsAvailable ?? 0);
-        if (avail <= 0) throw new Error("No hay cupos disponibles");
-        const reservations = Array.isArray(t.reservations) ? [...t.reservations] : [];
-        reservations.push({ uid: `manual-${Date.now()}`, name }); // guarda NOMBRE
-        tx.update(ref, { reservations, slotsAvailable: avail - 1 });
-      });
-      setManualName("");
-      setToast({ open: true, sev: "success", msg: "Reserva manual agregada." });
-    } catch (e) {
-      setToast({ open: true, sev: "error", msg: e.message || "No se pudo agregar la reserva." });
-    }
-  };
+  // FLEX: servicios con opciones
+  const [services, setServices] = useState([]); // [{id,name,options:[{id,durationMinutes,price}], _newDur,_newPrice}]
+  const [newServiceName, setNewServiceName] = useState("");
 
-  const handleAddClientByEmail = async () => {
-    try {
-      const email = clientEmail.trim().toLowerCase();
-      if (!dialogTurn || !email) return;
-      const q = query(collection(db, "users"), where("email", "==", email));
-      const snap = await getDocs(q);
-      if (snap.empty) throw new Error("No se encontró un usuario con ese email.");
-      const u = { id: snap.docs[0].id, ...snap.docs[0].data() };
-      const uid = u.userId || snap.docs[0].id;
+  // Cargar valores iniciales de place -> state
+  useEffect(() => {
+    if (!place) return;
+    setSchedulingMode(place.schedulingMode || (place.flexibleEnabled ? "flex" : "fixed"));
+    setServices(place.services || []);
+    setDepositPercent(Number(place.depositPercent || 0));
+  }, [place?.id]); // eslint-disable-line
 
-      const ref = doc(db, "turnos", dialogTurn.id);
-      await runTransaction(db, async (tx) => {
-        const tsnap = await tx.get(ref);
-        if (!tsnap.exists()) throw new Error("Turno inexistente");
-        const t = tsnap.data();
-        const avail = Number(t.slotsAvailable ?? 0);
-        if (avail <= 0) throw new Error("No hay cupos disponibles");
-        const oldRes = Array.isArray(t.reservations) ? t.reservations : [];
-        const oldUids = Array.isArray(t.reservationUids) ? t.reservationUids : [];
-        const already = oldRes.some(r => (typeof r === "string" ? r : r?.uid) === uid) || oldUids.includes(uid);
-        if (already) throw new Error("Ese usuario ya reservó este turno.");
-        const reservations = [...oldRes, { uid, name: u.name || u.fullName || "Ocupado" }]; // SOLO nombre
-        const reservationUids = oldUids.includes(uid) ? oldUids : [...oldUids, uid];
-        tx.update(ref, { reservations, reservationUids, slotsAvailable: avail - 1 });
-      });
-
-      setClientEmail("");
-      setToast({ open: true, sev: "success", msg: "Reserva agregada al cliente." });
-    } catch (e) {
-      setToast({ open: true, sev: "error", msg: e.message || "No se pudo agregar la reserva." });
-    }
-  };
-
-  // ----- Turnos fijos -----
-  const [recFrom, setRecFrom] = useState("");
-  const [recTo, setRecTo] = useState("");
-  const [recStart, setRecStart] = useState("10:00");
-  const [recEnd, setRecEnd] = useState("20:00");
-  const [recInterval, setRecInterval] = useState(60);
-  const [recSlots, setRecSlots] = useState(1);
-  const [recDays, setRecDays] = useState({ 1: true, 2: true, 3: true, 4: true, 5: true, 0: false, 6: false });
-  const [recServiceId, setRecServiceId] = useState(""); // opcional: generar fijos con tipo
-  const selectedService = services.find(s => s.id === recServiceId) || null;
-
-  const generateFixedTurns = async () => {
-    if (!placeId || !recFrom || !recTo) return;
-    const startDate = new Date(`${recFrom}T00:00:00`);
-    const endDate = new Date(`${recTo}T00:00:00`);
-    let created = 0;
-    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-      const dow = d.getDay();
-      if (!recDays[dow]) continue;
-
-      const [sh, sm] = recStart.split(":").map(Number);
-      const [eh, em] = recEnd.split(":").map(Number);
-      let cur = new Date(d.getFullYear(), d.getMonth(), d.getDate(), sh, sm, 0);
-      const end = new Date(d.getFullYear(), d.getMonth(), d.getDate(), eh, em, 0);
-      while (cur < end) {
-        const date = yyyymmdd(cur);
-        const time = `${pad2(cur.getHours())}:${pad2(cur.getMinutes())}`;
-
-        // no hay bloques/capacidad: generación simple
-        const exists = turns.some(t => t.date === date && t.time === time);
-        if (!exists) {
-          const durationMinutes = Number(selectedService?.durationMinutes || recInterval || 60);
-          await addDoc(collection(db, "turnos"), {
-            userId: user.uid,
-            userName: user.displayName || user.email || "Usuario",
-            placeId,
-            placeName,
-            date,
-            time,
-            dateTime: new Date(`${date}T${time}:00`).toISOString(),
-            serviceId: recServiceId || null,
-            serviceName: selectedService?.name || null,
-            durationMinutes, // clave para expirar y mostrar en calendario
-            slots: Number(recSlots),
-            slotsAvailable: Number(recSlots),
-            reservations: [],
-            reservationUids: [],
-            status: "available",
-            createdAt: serverTimestamp(),
-          });
-          created++;
-        }
-
-        cur = new Date(cur.getTime() + recInterval * 60000);
-      }
-    }
-    setToast({ open: true, sev: "success", msg: `Turnos creados: ${created}` });
-  };
-
-  // ----- Turno manual (nuevo tab) -----
-  const [manDate, setManDate] = useState("");
-  const [manTime, setManTime] = useState("10:00");
-  const [manServiceId, setManServiceId] = useState("");
-  const [manCustomDuration, setManCustomDuration] = useState("");
-  const [manSlots, setManSlots] = useState(1);
-  const canCreateManual = manDate && manTime && Number(manSlots) > 0;
-
-  const createManualTurn = async () => {
-    if (!placeId || !canCreateManual) return;
-    const svc = services.find(s => s.id === manServiceId) || null;
-    const durationMinutes = Number(manCustomDuration || svc?.durationMinutes || 60);
-    const date = manDate;
-    const time = manTime;
-
-    await addDoc(collection(db, "turnos"), {
-      userId: user.uid,
-      userName: user.displayName || user.email || "Usuario",
-      placeId,
-      placeName,
-      date,
-      time,
-      dateTime: new Date(`${date}T${time}:00`).toISOString(),
-      serviceId: manServiceId || null,
-      serviceName: svc?.name || null,
-      durationMinutes,
-      slots: Number(manSlots),
-      slotsAvailable: Number(manSlots),
-      reservations: [],
-      reservationUids: [],
-      status: "available",
-      createdAt: serverTimestamp(),
-      createdBy: "manual"
-    });
-
-    setManDate(""); setManTime("10:00"); setManServiceId(""); setManCustomDuration(""); setManSlots(1);
-    setToast({ open: true, sev: "success", msg: "Turno manual creado." });
-  };
-
-  // ----- Servicios flexibles (CRUD simple en places) -----
-  const [svcName, setSvcName] = useState("");
-  const [svcDuration, setSvcDuration] = useState("");
-  const addService = () => {
-    if (!svcName.trim() || Number(svcDuration) <= 0) return;
-    const id = `svc_${Math.random().toString(36).slice(2, 10)}`;
-    setServices(prev => [...prev, { id, name: svcName.trim(), durationMinutes: Number(svcDuration) }]);
-    setSvcName(""); setSvcDuration("");
-  };
-  const removeService = (id) => setServices(prev => prev.filter(s => s.id !== id));
-  const saveServices = async () => {
-    if (!placeId) return;
-    const pref = doc(db, "places", placeId);
-    await updateDoc(pref, { services, flexibleEnabled: true });
-    setToast({ open: true, sev: "success", msg: "Servicios guardados." });
-  };
-
+  // ===== Helpers generales =====
   const styles = {
     container: { p: 3, minHeight: "100vh", background: "linear-gradient(135deg, #4e54c8, #8f94fb)", color: "#fff" },
     headerBar: { display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 },
     panel: { background: "#fff", color: "#000", borderRadius: 12, padding: 12 },
-    agendaCard: { borderRadius: 10, background: "#f7f7ff" },
-    chip: { mr: 0.5, mt: 0.5 }
+    agendaCard: { borderRadius: 10, background: "#f7f7ff" }
   };
+
+  const savePlaceConfig = async (patch) => {
+    if (!placeId) return;
+    await updateDoc(doc(db, "places", placeId), patch);
+    setToast({ open: true, sev: "success", msg: "Configuración guardada." });
+  };
+
+  // ====== GENERACIÓN DE DISPONIBILIDAD ======
+  const ymd = (d) => yyyymmdd(d);
+  const loopDates = async (cb) => {
+    if (!fromDate || !toDate) return 0;
+    const startDate = new Date(`${fromDate}T00:00:00`);
+    const endDate = new Date(`${toDate}T00:00:00`);
+    let created = 0;
+    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+      const [sh, sm] = startTime.split(":").map(Number);
+      const [eh, em] = endTime.split(":").map(Number);
+      let cur = new Date(d.getFullYear(), d.getMonth(), d.getDate(), sh, sm, 0);
+      const end = new Date(d.getFullYear(), d.getMonth(), d.getDate(), eh, em, 0);
+      created += await cb(d, cur, end);
+    }
+    return created;
+  };
+
+  // ---- FIXED ----
+  const generateFixed = async () => {
+    if (!placeId || !fromDate || !toDate || !fixedSlotDuration) return;
+    const created = await loopDates(async (_d, cur, end) => {
+      let c = 0;
+      while (cur < end) {
+        const date = ymd(cur);
+        const time = `${pad2(cur.getHours())}:${pad2(cur.getMinutes())}`;
+
+        const existsQ = query(collection(db, "turnos"), where("placeId", "==", placeId), where("date", "==", date), where("time", "==", time));
+        const existsSnap = await getDocs(existsQ);
+        if (existsSnap.empty) {
+          await addDoc(collection(db, "turnos"), {
+            userId: user.uid,
+            userName: user.displayName || user.email || "Usuario",
+            placeId,
+            placeName: place?.name || "",
+            date,
+            time,
+            dateTime: new Date(`${date}T${time}:00`).toISOString(),
+            serviceId: fixedServiceId || null,
+            serviceName: (place?.services || []).find(s => s.id === fixedServiceId)?.name || null,
+            durationMinutes: Number(fixedSlotDuration),
+            slots: Number(fixedSlots || 1),
+            slotsAvailable: Number(fixedSlots || 1),
+            reservations: [],
+            reservationUids: [],
+            status: "available",
+            createdAt: serverTimestamp(),
+            mode: "fixed",
+          });
+          c++;
+        }
+        cur = new Date(cur.getTime() + Number(fixedSlotDuration) * 60000);
+      }
+      return c;
+    });
+    await savePlaceConfig({ schedulingMode: "fixed", flexibleEnabled: false });
+    setToast({ open: true, sev: "success", msg: `Turnos fijos creados: ${created}` });
+  };
+
+  // ---- FLEX ----
+  const minOptionDuration = useMemo(() => {
+    const all = (services || []).flatMap(s => s.options || []);
+    if (!all.length) return 30;
+    return Math.max(5, Math.min(...all.map(o => Number(o.durationMinutes || 0)).filter(n => n > 0)));
+  }, [services]);
+
+  const generateFlex = async () => {
+    if (!placeId || !fromDate || !toDate) {
+      setToast({ open:true, sev:"warning", msg:"Completá rango y opciones." });
+      return;
+    }
+    if (!services?.length || !services.some(s => (s.options||[]).length > 0)) {
+      setToast({ open:true, sev:"warning", msg:"Definí al menos un servicio con opciones." });
+      return;
+    }
+
+    const step = Number(minOptionDuration || 30);
+    const created = await loopDates(async (_d, cur, end) => {
+      let c = 0;
+      while (cur < end) {
+        const date = ymd(cur);
+        const time = `${pad2(cur.getHours())}:${pad2(cur.getMinutes())}`;
+
+        const existsQ = query(collection(db, "turnos"), where("placeId", "==", placeId), where("date", "==", date), where("time", "==", time));
+        const existsSnap = await getDocs(existsQ);
+        if (existsSnap.empty) {
+          await addDoc(collection(db, "turnos"), {
+            userId: user.uid,
+            userName: user.displayName || user.email || "Usuario",
+            placeId,
+            placeName: place?.name || "",
+            date,
+            time,
+            dateTime: new Date(`${date}T${time}:00`).toISOString(),
+            durationMinutes: step, // granularidad mínima
+            slots: 1,
+            slotsAvailable: 1,
+            reservations: [],
+            reservationUids: [],
+            status: "available",
+            createdAt: serverTimestamp(),
+            mode: "flex",
+          });
+          c++;
+        }
+        cur = new Date(cur.getTime() + step * 60000);
+      }
+      return c;
+    });
+
+    await savePlaceConfig({
+      schedulingMode: "flex",
+      flexibleEnabled: true,
+      depositPercent: Number(depositPercent || 0),
+      services
+    });
+    setToast({ open: true, sev: "success", msg: `Turnos flexibles creados: ${created}` });
+  };
+
+  // ====== CRUD de servicios/opciones (modo flex) =========
+  const addService = () => {
+    if (!newServiceName.trim()) return;
+    const id = `svc_${Math.random().toString(36).slice(2,10)}`;
+    setServices(prev => [...prev, { id, name: newServiceName.trim(), options: [] }]);
+    setNewServiceName("");
+  };
+  const removeService = (id) => setServices(prev => prev.filter(s => s.id !== id));
+  const addOptionToService = (idx, dur, price) => {
+    if (!dur || !price) return;
+    const opt = { id: `opt_${Math.random().toString(36).slice(2,10)}`, durationMinutes: Number(dur), price: Number(price) };
+    setServices(prev => prev.map((s,i)=> i===idx ? {...s, options: [...(s.options||[]), opt], _newDur:"", _newPrice:""} : s));
+  };
+  const removeOptionFromService = (idx, optId) => {
+    setServices(prev => prev.map((s,i)=> i===idx ? {...s, options: (s.options||[]).filter(o=>o.id!==optId)} : s));
+  };
+  const saveFlexConfig = async () => {
+    await savePlaceConfig({ schedulingMode: "flex", flexibleEnabled: true, services, depositPercent: Number(depositPercent || 0) });
+  };
+  const saveFixedConfig = async () => {
+    await savePlaceConfig({ schedulingMode: "fixed", flexibleEnabled: false });
+  };
+
+  // ====== Borrar turnos ======
+  const [delFrom, setDelFrom] = useState("");
+  const [delTo, setDelTo] = useState("");
+  const deleteAllTurns = async () => {
+    if (!placeId) return;
+    if (!window.confirm("¿Borrar TODOS los turnos de este lugar?")) return;
+    const qAll = query(collection(db, "turnos"), where("placeId", "==", placeId));
+    const snap = await getDocs(qAll);
+    let deleted = 0;
+    for (const d of snap.docs) {
+      await deleteDoc(doc(db, "turnos", d.id));
+      deleted++;
+    }
+    setToast({ open: true, sev: "success", msg: `Turnos borrados: ${deleted}` });
+  };
+  const deleteTurnsByPeriod = async () => {
+    if (!placeId) return;
+    if (!delFrom || !delTo) { setToast({ open:true, sev:"warning", msg:"Elegí rango de fechas."}); return; }
+    const qAll = query(collection(db, "turnos"), where("placeId", "==", placeId));
+    const snap = await getDocs(qAll);
+    let deleted = 0;
+    for (const d of snap.docs) {
+      const t = d.data();
+      if (t?.date && t.date >= delFrom && t.date <= delTo) {
+        await deleteDoc(doc(db, "turnos", d.id));
+        deleted++;
+      }
+    }
+    setToast({ open: true, sev: "success", msg: `Turnos borrados en rango: ${deleted}` });
+  };
+
+  // ====== Reserva manual en diálogo ======
+  const openTurnDialog = (turn) => {
+    setDialogTurn(turn);
+    setManualName("");
+    setManualServiceId("");
+    setManualOptionId("");
+  };
+
+  const manualService = useMemo(
+    () => (place?.services || []).find(s => s.id === manualServiceId) || null,
+    [manualServiceId, place?.services]
+  );
+  const manualOptions = manualService ? (manualService.options || []) : [];
+
+  const handleAddManualReservation = async () => {
+    try {
+      if (!dialogTurn) return;
+      const name = manualName.trim();
+      if (!name) {
+        setToast({ open: true, sev: "warning", msg: "Ingresá un nombre." });
+        return;
+      }
+
+      await runTransaction(db, async (tx) => {
+        const ref = doc(db, "turnos", dialogTurn.id);
+        const snap = await tx.get(ref);
+        if (!snap.exists()) throw new Error("Turno inexistente");
+        const t = snap.data();
+
+        const placeRef = doc(db, "places", t.placeId);
+        const pSnap = await tx.get(placeRef);
+        const pData = pSnap.exists() ? pSnap.data() : {};
+        const schedulingModeTx = pData.schedulingMode || (pData.flexibleEnabled ? "flex" : "fixed");
+        const depositPercentTx = Number(pData.depositPercent || 0);
+
+        const avail = Number(t.slotsAvailable ?? t.slots ?? 0);
+        if (avail <= 0) throw new Error("No hay cupos disponibles");
+
+        // Hora/fecha base del bloque actual
+        const baseDate = t.date;
+        const [hh, mm] = (t.time || "00:00").split(":").map(Number);
+        const baseStart = new Date(`${baseDate}T${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}:00`);
+        const baseDur = Number(t.durationMinutes || 60);
+
+        let serviceId = manualServiceId || t.serviceId || null;
+        let serviceName = (place?.services || []).find(s=>s.id===manualServiceId)?.name || t.serviceName || null;
+        let need = baseDur;       // minutos a reservar
+        let price = 0;
+
+        if (schedulingModeTx === "flex") {
+          // Requiere servicio/opción
+          if (!manualServiceId || !manualOptionId) {
+            throw new Error("Elegí servicio y duración.");
+          }
+          const svc = (pData.services || []).find(s => s.id === manualServiceId);
+          const opt = (svc?.options || []).find(o => o.id === manualOptionId);
+          if (!svc || !opt) throw new Error("Opción inválida.");
+
+          serviceId = svc.id;
+          serviceName = svc.name;
+          need = Number(opt.durationMinutes);
+          price = Number(opt.price);
+
+          // Paso (granularidad) = mínima opción del lugar
+          const allOpts = (pData.services || []).flatMap(s => s.options || []);
+          const step = Math.max(5, Math.min(...allOpts.map(o => Number(o.durationMinutes || 0)).filter(n => n > 0)) || Number(t.durationMinutes || 30));
+
+          if (need <= 0) throw new Error("Duración inválida.");
+
+          if (need === baseDur) {
+            // Caso simple: ocupa SOLO este bloque
+            const reservations = Array.isArray(t.reservations) ? [...t.reservations] : [];
+            reservations.push({
+              uid: `manual-${Date.now()}`,
+              name,
+              serviceId,
+              serviceName,
+              durationMinutes: need,
+              price,
+              depositPercent: depositPercentTx,
+              depositDue: Math.round(price * (depositPercentTx/100)),
+              manual: true,
+            });
+            tx.update(ref, {
+              reservations,
+              slotsAvailable: avail - 1,
+            });
+
+          } else if (need < baseDur) {
+            // SPLIT: reservar una parte y publicar remanente como nuevo bloque
+            const reservations = Array.isArray(t.reservations) ? [...t.reservations] : [];
+            reservations.push({
+              uid: `manual-${Date.now()}`,
+              name,
+              serviceId,
+              serviceName,
+              durationMinutes: need,
+              price,
+              depositPercent: depositPercentTx,
+              depositDue: Math.round(price * (depositPercentTx/100)),
+              manual: true,
+            });
+
+            tx.update(ref, {
+              reservations,
+              slotsAvailable: avail - 1,
+            });
+
+            const newStart = new Date(baseStart.getTime() + need * 60000);
+            const hh2 = String(newStart.getHours()).padStart(2,"0");
+            const mm2 = String(newStart.getMinutes()).padStart(2,"0");
+            const remainderDuration = baseDur - need;
+
+            const clashQ = query(
+              collection(db, "turnos"),
+              where("placeId", "==", t.placeId),
+              where("date", "==", baseDate),
+              where("time", "==", `${hh2}:${mm2}`)
+            );
+            const clashSnap = await getDocs(clashQ);
+            if (clashSnap.empty) {
+              throw { __createRemainder: {
+                placeId: t.placeId,
+                placeName: t.placeName || place?.name || "—",
+                date: baseDate,
+                time: `${hh2}:${mm2}`,
+                dateTime: new Date(`${baseDate}T${hh2}:${mm2}:00`).toISOString(),
+                durationMinutes: remainderDuration,
+                slots: 1,
+                slotsAvailable: 1,
+                reservations: [],
+                reservationUids: [],
+                status: "available",
+                createdAt: serverTimestamp(),
+                mode: t.mode || "flex",
+              }};
+            }
+
+          } else {
+            // MERGE: necesitamos k bloques contiguos empezando en este
+            const k = Math.ceil(need / step);
+            const neededTimes = [];
+            for (let i = 0; i < k; i++) {
+              const dt = new Date(baseStart.getTime() + i * step * 60000);
+              neededTimes.push(`${String(dt.getHours()).padStart(2,"0")}:${String(dt.getMinutes()).padStart(2,"0")}`);
+            }
+
+            const qDay = query(collection(db, "turnos"), where("placeId", "==", t.placeId), where("date", "==", baseDate));
+            const daySnap = await getDocs(qDay);
+            const byTime = {};
+            daySnap.docs.forEach(d => { const td = d.data(); byTime[td.time] = { id: d.id, ...td }; });
+
+            const blockDocs = neededTimes.map(tm => byTime[tm]).filter(Boolean);
+            if (blockDocs.length < neededTimes.length) throw new Error("No hay disponibilidad contigua suficiente.");
+
+            const snaps = await Promise.all(blockDocs.map(b => tx.get(doc(db, "turnos", b.id))));
+            const fresh = snaps.map(s => ({ id: s.id, ...s.data() }));
+            for (const b of fresh) {
+              const a = Number(b.slotsAvailable ?? b.slots ?? 0);
+              if (a <= 0 || b.status === "expired") throw new Error("No hay disponibilidad contigua suficiente.");
+            }
+
+            const first = fresh[0];
+            const firstRef = doc(db, "turnos", first.id);
+            const reservations = Array.isArray(first.reservations) ? [...first.reservations] : [];
+            reservations.push({
+              uid: `manual-${Date.now()}`,
+              name,
+              serviceId,
+              serviceName,
+              durationMinutes: need,
+              price,
+              depositPercent: depositPercentTx,
+              depositDue: Math.round(price * (depositPercentTx/100)),
+              manual: true,
+            });
+
+            tx.update(firstRef, {
+              durationMinutes: need,
+              slotsAvailable: Number(first.slotsAvailable ?? first.slots ?? 0) - 1,
+              reservationUids: [...(first.reservationUids || []), `manual-${Date.now()}`],
+              reservations,
+              placeName: first.placeName || place?.name || "—",
+            });
+
+            for (let i = 1; i < fresh.length; i++) {
+              tx.delete(doc(db, "turnos", fresh[i].id));
+            }
+          }
+
+        } else {
+          // MODO FIXED: reserva el bloque completo
+          const reservations = Array.isArray(t.reservations) ? [...t.reservations] : [];
+          reservations.push({
+            uid: `manual-${Date.now()}`,
+            name,
+            serviceId,
+            serviceName,
+            durationMinutes: baseDur,
+            price: 0,
+            depositPercent: depositPercentTx,
+            depositDue: 0,
+            manual: true,
+          });
+          tx.update(ref, {
+            reservations,
+            slotsAvailable: avail - 1,
+          });
+        }
+      });
+
+      // creación de remanente si corresponde
+    } catch (e) {
+      if (e && e.__createRemainder) {
+        try {
+          await addDoc(collection(db, "turnos"), e.__createRemainder);
+          setToast({ open: true, sev: "success", msg: "Reserva manual agregada." });
+          setDialogTurn(null);
+          return;
+        } catch (e2) {
+          setToast({ open: true, sev: "error", msg: "No se pudo crear el remanente." });
+          return;
+        }
+      }
+      setToast({ open: true, sev: "error", msg: e.message || "No se pudo agregar la reserva." });
+      return;
+    }
+
+    setToast({ open: true, sev: "success", msg: "Reserva manual agregada." });
+    setDialogTurn(null);
+  };
+  // ====== /Reserva manual ======
+
+  if (!place) {
+    return (
+      <Box sx={{ p: 3, color: "#fff" }}>
+        <Typography>Cargando…</Typography>
+      </Box>
+    );
+  }
 
   return (
     <Box sx={styles.container}>
       <Box sx={styles.headerBar}>
         <Box>
           <Typography variant="h4">Panel del Lugar</Typography>
-          <Typography variant="subtitle1" sx={{ opacity: 0.9 }}>{placeName || "—"}</Typography>
+          <Typography variant="subtitle1" sx={{ opacity: 0.9 }}>{place?.name || "—"}</Typography>
         </Box>
         <Box sx={{ display: "flex", gap: 1 }}>
           <Button
@@ -458,12 +654,12 @@ export default function PlaceDashboard({ user }) {
         </Box>
       </Box>
 
+      {/* Calendario + Agenda */}
       <Grid container spacing={2}>
-        {/* Calendario */}
         <Grid item xs={12} md={8}>
           <Box sx={styles.panel}>
             <Typography variant="subtitle2" sx={{ mb: 1, opacity: 0.8 }}>
-              Verde: Disponible — Rojo: Completo
+              Verde: Disponible — Rojo: Ocupado
             </Typography>
             <Calendar
               localizer={localizer}
@@ -474,8 +670,7 @@ export default function PlaceDashboard({ user }) {
               views={[Views.WEEK, Views.DAY, Views.MONTH]}
               step={60}
               timeslots={1}
-              selectable
-              onSelectEvent={onSelectEvent}
+              onSelectEvent={(ev)=> openTurnDialog(ev.turn)}
               onSelectSlot={({ start }) => setSelectedDate(start)}
               onNavigate={(d) => setSelectedDate(d)}
               eventPropGetter={eventPropGetter}
@@ -484,7 +679,6 @@ export default function PlaceDashboard({ user }) {
           </Box>
         </Grid>
 
-        {/* Agenda del día */}
         <Grid item xs={12} md={4}>
           <Box sx={styles.panel}>
             <Typography variant="h6">Agenda del {yyyymmdd(selectedDate)}</Typography>
@@ -495,12 +689,7 @@ export default function PlaceDashboard({ user }) {
               <Stack spacing={1.2}>
                 {dayAgenda.map((t) => {
                   const avail = Number(t.slotsAvailable ?? t.slots ?? 0);
-                  const booked = Array.isArray(t.reservations) ? t.reservations.length : 0;
                   const full = avail <= 0;
-                  const title = full
-                    ? reservationLabel((t.reservations || [])[0], namesByUid) // nombre
-                    : "Disponible";
-                  const dur = Number(t.durationMinutes || 60);
                   return (
                     <Card key={t.id} variant="outlined" sx={styles.agendaCard}>
                       <CardContent sx={{ pb: 1.5 }}>
@@ -510,15 +699,15 @@ export default function PlaceDashboard({ user }) {
                               {t.time} {t.serviceName ? `· ${t.serviceName}` : ""}
                             </Typography>
                             <Typography variant="body2" color="text.secondary">
-                              {title} · {full ? `Reservas: ${booked}` : `Disponibles: ${avail}`} · {dur} min
+                              {full ? "Ocupado" : "Disponible"} · {getDurationMin(t)} min · Cupos: {avail}
                             </Typography>
                           </Box>
-                          <Button size="small" variant="contained" onClick={() => setDialogTurn(t)}>Ver</Button>
+                          <Button size="small" variant="contained" onClick={()=>openTurnDialog(t)}>Ver</Button>
                         </Box>
 
                         <Box sx={{ mt: 1 }}>
                           {(t.reservations || []).map((r, idx) => (
-                            <Chip key={idx} label={reservationLabel(r, namesByUid)} size="small" sx={styles.chip} />
+                            <Chip key={idx} label={`${r.name}${r.serviceName ? ` · ${r.serviceName}` : ""}`} size="small" sx={{ mr: .5, mb: .5 }} />
                           ))}
                         </Box>
                       </CardContent>
@@ -531,152 +720,263 @@ export default function PlaceDashboard({ user }) {
         </Grid>
       </Grid>
 
-      {/* Panel inferior: Turnos fijos / Turno manual / Servicios flexibles */}
+      {/* Panel inferior */}
       <Box sx={{ mt: 2, ...styles.panel }}>
         <Tabs value={adminTab} onChange={(_, v) => setAdminTab(v)}>
-          <Tab label="Turnos fijos" />
-          <Tab label="Agregar turno manual" />
-          <Tab label="Servicios flexibles" />
+          <Tab label="Configurar & Generar" />
+          <Tab label="Servicios (modo flexible)" />
+          <Tab label="Borrar turnos" />
         </Tabs>
 
-        {/* Turnos fijos */}
+        {/* CONFIGURAR & GENERAR */}
         {adminTab === 0 && (
           <Box sx={{ mt: 2 }}>
-            <Grid container spacing={2}>
-              <Grid item xs={12} md={2}>
-                <TextField label="Desde" type="date" value={recFrom} onChange={e=>setRecFrom(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
-              </Grid>
-              <Grid item xs={12} md={2}>
-                <TextField label="Hasta" type="date" value={recTo} onChange={e=>setRecTo(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
-              </Grid>
-              <Grid item xs={12} md={2}>
-                <TextField label="Inicio" type="time" value={recStart} onChange={e=>setRecStart(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
-              </Grid>
-              <Grid item xs={12} md={2}>
-                <TextField label="Fin" type="time" value={recEnd} onChange={e=>setRecEnd(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
-              </Grid>
-              <Grid item xs={12} md={2}>
-                <TextField label="Cada (min)" type="number" value={recInterval} onChange={e=>setRecInterval(Number(e.target.value||60))} fullWidth />
-              </Grid>
-              <Grid item xs={12} md={2}>
-                <TextField label="Cupos" type="number" value={recSlots} onChange={e=>setRecSlots(Number(e.target.value||1))} fullWidth />
-              </Grid>
+            {/* Elegir modo */}
+            <Typography variant="subtitle1" sx={{ mb: 1 }}>Modo de agenda</Typography>
+            <RadioGroup
+              row
+              value={schedulingMode}
+              onChange={(e) => setSchedulingMode(e.target.value)}
+            >
+              <FormControlLabel value="fixed" control={<Radio />} label="Turnos fijos" />
+              <FormControlLabel value="flex" control={<Radio />} label="Turnos flexibles" />
+            </RadioGroup>
 
-              <Grid item xs={12} md={4}>
-                <TextField
-                  select
-                  label="Tipo de servicio (opcional)"
-                  value={recServiceId}
-                  onChange={(e)=>setRecServiceId(e.target.value)}
-                  fullWidth
-                >
-                  <MenuItem value="">(Sin tipo)</MenuItem>
-                  {services.map(s => (
-                    <MenuItem key={s.id} value={s.id}>{s.name} ({s.durationMinutes} min)</MenuItem>
-                  ))}
-                </TextField>
+            {/* Rango común */}
+            <Grid container spacing={2} sx={{ mt: 1 }}>
+              <Grid item xs={12} md={3}>
+                <TextField label="Desde (fecha)" type="date" value={fromDate} onChange={e=>setFromDate(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <TextField label="Hasta (fecha)" type="date" value={toDate} onChange={e=>setToDate(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <TextField label="Inicio" type="time" value={startTime} onChange={e=>setStartTime(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <TextField label="Fin" type="time" value={endTime} onChange={e=>setEndTime(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
               </Grid>
             </Grid>
 
-            <Box sx={{ mt: 1, display: "flex", gap: 1, flexWrap: "wrap" }}>
-              {["D","L","M","Mí","J","V","S"].map((lbl, i) => {
-                const map = {0: "D",1: "L",2:"M",3:"Mí",4:"J",5:"V",6:"S"};
-                const dow = Object.keys(map).find(k => map[k]===lbl)*1;
-                const active = !!recDays[dow];
-                return (
-                  <Chip
-                    key={lbl}
-                    label={lbl}
-                    color={active ? "primary" : "default"}
-                    onClick={()=>setRecDays(d => ({...d, [dow]: !d[dow]}))}
-                  />
-                );
-              })}
-            </Box>
+            {/* FIXED config */}
+            {schedulingMode === "fixed" && (
+              <>
+                <Divider sx={{ my: 2 }} />
+                <Typography variant="subtitle1" sx={{ mb: 1 }}>Turnos fijos</Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={3}>
+                    <TextField label="Duración de cada turno (min)" type="number" value={fixedSlotDuration} onChange={e=>setFixedSlotDuration(Number(e.target.value||60))} fullWidth />
+                  </Grid>
+                  <Grid item xs={12} md={3}>
+                    <TextField label="Cupos por turno" type="number" value={fixedSlots} onChange={e=>setFixedSlots(Number(e.target.value||1))} fullWidth />
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      select
+                      label="Servicio base (opcional)"
+                      value={fixedServiceId}
+                      onChange={(e)=>setFixedServiceId(e.target.value)}
+                      fullWidth
+                    >
+                      <MenuItem value="">(Sin servicio)</MenuItem>
+                      {(place?.services || []).map(s => (
+                        <MenuItem key={s.id} value={s.id}>{s.name}</MenuItem>
+                      ))}
+                    </TextField>
+                  </Grid>
+                </Grid>
 
-            <Button sx={{ mt: 2 }} variant="contained" onClick={generateFixedTurns}>
-              Generar turnos
-            </Button>
-          </Box>
-        )}
-
-        {/* Agregar turno manual */}
-        {adminTab === 1 && (
-          <Box sx={{ mt: 2 }}>
-            <Grid container spacing={2}>
-              <Grid item xs={12} md={3}>
-                <TextField label="Fecha" type="date" value={manDate} onChange={e=>setManDate(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
-              </Grid>
-              <Grid item xs={12} md={3}>
-                <TextField label="Hora" type="time" value={manTime} onChange={e=>setManTime(e.target.value)} InputLabelProps={{shrink:true}} fullWidth />
-              </Grid>
-              <Grid item xs={12} md={3}>
-                <TextField
-                  select
-                  label="Tipo de servicio"
-                  value={manServiceId}
-                  onChange={e=>setManServiceId(e.target.value)}
-                  fullWidth
-                >
-                  <MenuItem value="">(Sin tipo)</MenuItem>
-                  {services.map(s => (
-                    <MenuItem key={s.id} value={s.id}>{s.name} ({s.durationMinutes} min)</MenuItem>
-                  ))}
-                </TextField>
-              </Grid>
-              <Grid item xs={12} md={3}>
-                <TextField label="Duración custom (min)" type="number" value={manCustomDuration} onChange={e=>setManCustomDuration(e.target.value)} fullWidth />
-              </Grid>
-              <Grid item xs={12} md={3}>
-                <TextField label="Cupos" type="number" value={manSlots} onChange={e=>setManSlots(Number(e.target.value||1))} fullWidth />
-              </Grid>
-            </Grid>
-
-            <Button sx={{ mt: 2 }} variant="contained" disabled={!canCreateManual} onClick={createManualTurn}>
-              Crear turno manual
-            </Button>
-          </Box>
-        )}
-
-        {/* Servicios flexibles */}
-        {adminTab === 2 && (
-          <Box sx={{ mt: 2 }}>
-            <Grid container spacing={2}>
-              <Grid item xs={12} md={4}>
-                <TextField label="Nombre del servicio" value={svcName} onChange={e=>setSvcName(e.target.value)} fullWidth />
-              </Grid>
-              <Grid item xs={12} md={3}>
-                <TextField label="Duración (min)" type="number" value={svcDuration} onChange={e=>setSvcDuration(e.target.value)} fullWidth />
-              </Grid>
-              <Grid item xs={12} md={3}>
-                <Button variant="contained" sx={{ height: "100%" }} onClick={addService}>Agregar</Button>
-              </Grid>
-            </Grid>
-
-            <Divider sx={{ my: 2 }} />
-
-            {services.length === 0 ? (
-              <Typography color="text.secondary">Aún no hay servicios.</Typography>
-            ) : (
-              <Stack spacing={1}>
-                {services.map(s => (
-                  <Stack key={s.id} direction="row" spacing={2} alignItems="center">
-                    <Typography sx={{ minWidth: 240 }}>{s.name}</Typography>
-                    <Typography>{s.durationMinutes} min</Typography>
-                    <IconButton onClick={() => removeService(s.id)} aria-label="Eliminar">
-                      <DeleteOutlineIcon />
-                    </IconButton>
-                  </Stack>
-                ))}
-              </Stack>
+                <Box sx={{ mt: 2, display: "flex", gap: 1 }}>
+                  <Button variant="contained" onClick={async ()=>{ await saveFixedConfig(); await generateFixed(); }}>
+                    Generar turnos fijos
+                  </Button>
+                </Box>
+              </>
             )}
 
-            <Button sx={{ mt: 2 }} variant="contained" onClick={saveServices}>Guardar cambios</Button>
+            {/* FLEX config resumida */}
+            {schedulingMode === "flex" && (
+              <>
+                <Divider sx={{ my: 2 }} />
+                <Typography variant="subtitle1" sx={{ mb: 1 }}>Turnos flexibles</Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={4}>
+                    <TextField
+                      label="Seña requerida (%)"
+                      type="number"
+                      value={depositPercent}
+                      onChange={(e)=>setDepositPercent(Number(e.target.value||0))}
+                      fullWidth
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={8}>
+                    <Typography variant="body2" sx={{ mt: 1.5 }}>
+                      Granularidad mínima calculada por las opciones: <strong>{minOptionDuration} min</strong>
+                    </Typography>
+                  </Grid>
+                </Grid>
+                <Typography variant="body2" sx={{ mt: 1, color: "text.secondary" }}>
+                  Tip: definí servicios y opciones (duración + precio) en la pestaña “Servicios (modo flexible)”.
+                </Typography>
+
+                <Box sx={{ mt: 2, display: "flex", gap: 1 }}>
+                  <Button variant="contained" onClick={async ()=>{ await saveFlexConfig(); await generateFlex(); }}>
+                    Generar turnos flexibles
+                  </Button>
+                </Box>
+              </>
+            )}
+          </Box>
+        )}
+
+        {/* SERVICIOS (modo flex) */}
+        {adminTab === 1 && (
+          <Box sx={{ mt: 2 }}>
+            <Grid container spacing={2} sx={{ mb: 2 }}>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="Seña requerida (%)"
+                  type="number"
+                  value={depositPercent}
+                  onChange={(e)=>setDepositPercent(Number(e.target.value||0))}
+                  fullWidth
+                />
+              </Grid>
+              <Grid item xs={12} md={6} sx={{ display: "flex", alignItems: "center" }}>
+                <Typography variant="body2">
+                  Granularidad mínima actual: <strong>{minOptionDuration} min</strong>
+                </Typography>
+              </Grid>
+            </Grid>
+
+            {/* Alta de servicio */}
+            <Grid container spacing={2} sx={{ mb: 2 }}>
+              <Grid item xs={12} md={6}>
+                <TextField label="Nombre del servicio" value={newServiceName} onChange={e=>setNewServiceName(e.target.value)} fullWidth />
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <Button variant="contained" sx={{ height: "100%" }} onClick={addService}>Agregar servicio</Button>
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <Button variant="outlined" sx={{ height: "100%" }} onClick={saveFlexConfig}>Guardar</Button>
+              </Grid>
+            </Grid>
+
+            {/* Lista de servicios con opciones (duración+precio) */}
+            <Stack spacing={2}>
+              {services.length === 0 && <Typography color="text.secondary">Aún no hay servicios.</Typography>}
+              {services.map((svc, idx) => (
+                <Box key={svc.id} sx={{ border: "1px solid #eee", borderRadius: 2, p: 2 }}>
+                  <Box sx={{ display:"flex", justifyContent:"space-between", alignItems:"center", mb: 1 }}>
+                    <Typography variant="subtitle1">{svc.name}</Typography>
+                    <Button color="error" onClick={()=>removeService(svc.id)}>Eliminar servicio</Button>
+                  </Box>
+
+                  {/* Agregar opción */}
+                  <Grid container spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                    <Grid item xs={12} md={3}>
+                      <TextField
+                        label="Duración (min)"
+                        type="number"
+                        size="small"
+                        value={svc._newDur || ""}
+                        onChange={(e)=>{
+                          const v = e.target.value;
+                          setServices(prev => prev.map((s,i)=> i===idx ? {...s, _newDur: v} : s));
+                        }}
+                        fullWidth
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={3}>
+                      <TextField
+                        label="Precio ($)"
+                        type="number"
+                        size="small"
+                        value={svc._newPrice || ""}
+                        onChange={(e)=>{
+                          const v = e.target.value;
+                          setServices(prev => prev.map((s,i)=> i===idx ? {...s, _newPrice: v} : s));
+                        }}
+                        fullWidth
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={3}>
+                      <Button
+                        variant="outlined"
+                        onClick={()=> addOptionToService(idx, Number(svc._newDur), Number(svc._newPrice))}
+                      >
+                        Agregar opción
+                      </Button>
+                    </Grid>
+                  </Grid>
+
+                  {/* Opciones existentes */}
+                  <Stack spacing={0.5}>
+                    {(svc.options || []).map((o) => (
+                      <Box key={o.id} sx={{ display:"flex", gap: 2, alignItems:"center" }}>
+                        <Chip label={`${o.durationMinutes} min`} size="small" />
+                        <Chip label={`$${o.price}`} size="small" color="success" />
+                        <Button size="small" color="error" onClick={()=>removeOptionFromService(idx, o.id)}>
+                          Eliminar opción
+                        </Button>
+                      </Box>
+                    ))}
+                  </Stack>
+                </Box>
+              ))}
+            </Stack>
+
+            <Button sx={{ mt: 2 }} variant="contained" onClick={saveFlexConfig}>
+              Guardar cambios
+            </Button>
+          </Box>
+        )}
+
+        {/* BORRAR TURNOS */}
+        {adminTab === 2 && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle1" sx={{ mb: 1 }}>
+              Borrar turnos publicados
+            </Typography>
+
+            <Stack direction="row" spacing={2} sx={{ mb: 2 }} flexWrap="wrap">
+              <Button color="error" variant="contained" onClick={deleteAllTurns}>
+                Borrar todos
+              </Button>
+            </Stack>
+
+            <Grid container spacing={2} alignItems="center">
+              <Grid item xs={12} md={3}>
+                <TextField
+                  label="Desde (fecha)"
+                  type="date"
+                  value={delFrom}
+                  onChange={(e)=>setDelFrom(e.target.value)}
+                  InputLabelProps={{shrink:true}}
+                  fullWidth
+                />
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <TextField
+                  label="Hasta (fecha)"
+                  type="date"
+                  value={delTo}
+                  onChange={(e)=>setDelTo(e.target.value)}
+                  InputLabelProps={{shrink:true}}
+                  fullWidth
+                />
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <Button variant="outlined" color="error" onClick={deleteTurnsByPeriod}>
+                  Borrar por período
+                </Button>
+              </Grid>
+            </Grid>
           </Box>
         )}
       </Box>
 
-      {/* Diálogo del turno */}
+      {/* Diálogo: Turno + reserva manual */}
       <Dialog open={!!dialogTurn} onClose={() => setDialogTurn(null)} maxWidth="sm" fullWidth>
         <DialogTitle>Turno</DialogTitle>
         <DialogContent dividers>
@@ -684,10 +984,8 @@ export default function PlaceDashboard({ user }) {
             <>
               <Typography><strong>Fecha:</strong> {dialogTurn.date}</Typography>
               <Typography><strong>Hora:</strong> {dialogTurn.time}</Typography>
-              {dialogTurn.serviceName && <Typography><strong>Servicio:</strong> {dialogTurn.serviceName}</Typography>}
-              <Typography><strong>Duración:</strong> {Number(dialogTurn.durationMinutes || 60)} min</Typography>
-              <Typography><strong>Cupos totales:</strong> {dialogTurn.slots}</Typography>
-              <Typography><strong>Cupos disponibles:</strong> {dialogTurn.slotsAvailable ?? dialogTurn.slots}</Typography>
+              <Typography><strong>Duración:</strong> {getDurationMin(dialogTurn)} min</Typography>
+              <Typography><strong>Cupos disp.:</strong> {dialogTurn.slotsAvailable ?? dialogTurn.slots}</Typography>
 
               <Divider sx={{ my: 2 }} />
 
@@ -696,71 +994,92 @@ export default function PlaceDashboard({ user }) {
                 <Typography color="text.secondary">Sin reservas.</Typography>
               ) : (
                 <Stack spacing={1}>
-                  {dialogTurn.reservations.map((r, i) => {
-                    const label = reservationLabel(r, namesByUid); // nombre
-                    return (
-                      <Box key={i} sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <Typography>{label}</Typography>
-                        <IconButton
-                          aria-label="cancelar"
-                          color="error"
-                          size="small"
-                          onClick={async () => {
-                            await handleCancelReservation(dialogTurn, r);
-                            const refreshed = turns.find(t => t.id === dialogTurn.id);
-                            if (refreshed) setDialogTurn(refreshed);
-                          }}
-                        >
-                          <PersonRemoveIcon />
-                        </IconButton>
-                      </Box>
-                    );
-                  })}
+                  {dialogTurn.reservations.map((r, i) => (
+                    <Box key={i} sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <Typography>{r.name}{r.serviceName ? ` · ${r.serviceName}` : ""}{r.durationMinutes ? ` · ${r.durationMinutes} min` : ""}</Typography>
+                    </Box>
+                  ))}
                 </Stack>
               )}
 
               <Divider sx={{ my: 2 }} />
 
               <Typography variant="subtitle1">Agregar reserva manual</Typography>
-              <Box sx={{ display: "flex", gap: 1, mt: 1 }}>
-                <TextField label="Nombre" size="small" value={manualName} onChange={(e) => setManualName(e.target.value)} />
-                <Button variant="contained" onClick={async () => {
-                  await handleAddManualReservation();
-                  const refreshed = turns.find(t => t.id === dialogTurn.id);
-                  if (refreshed) setDialogTurn(refreshed);
-                }}>
-                  Agregar
-                </Button>
-              </Box>
+              <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: "wrap" }}>
+                <TextField
+                  label="Nombre"
+                  size="small"
+                  value={manualName}
+                  onChange={(e) => setManualName(e.target.value)}
+                />
+                {/* Servicio */}
+                <TextField
+                  select
+                  size="small"
+                  label="Servicio"
+                  value={manualServiceId}
+                  onChange={(e)=>{ setManualServiceId(e.target.value); setManualOptionId(""); }}
+                  sx={{ minWidth: 220 }}
+                >
+                  <MenuItem value="">(Sin servicio)</MenuItem>
+                  {(place?.services || []).map(s => (
+                    <MenuItem key={s.id} value={s.id}>{s.name}</MenuItem>
+                  ))}
+                </TextField>
+                
 
-              <Typography variant="subtitle1" sx={{ mt: 2 }}>Agregar por email (cliente existente)</Typography>
-              <Box sx={{ display: "flex", gap: 1, mt: 1 }}>
-                <TextField label="Email del cliente" size="small" value={clientEmail} onChange={(e) => setClientEmail(e.target.value)} />
-                <Button variant="outlined" onClick={async () => {
-                  await handleAddClientByEmail();
-                  const refreshed = turns.find(t => t.id === dialogTurn.id);
-                  if (refreshed) setDialogTurn(refreshed);
-                }}>
+                {/* Duración (solo en modo flex) */}
+                { (place?.schedulingMode === "flex")
+                  ? (
+                    <TextField
+                      select
+                      size="small"
+                      label="Duración (opción)"
+                      value={manualOptionId}
+                      onChange={(e)=> setManualOptionId(e.target.value)}
+                      sx={{ minWidth: 200 }}
+                    >
+                      <MenuItem value="">(Elegir)</MenuItem>
+                      {manualOptions.map(o => (
+                        <MenuItem key={o.id} value={o.id}>
+                          {o.durationMinutes} min — ${o.price}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                  ) : (
+                    <TextField
+                      size="small"
+                      label="Duración (fija)"
+                      value={getDurationMin(dialogTurn)}
+                      disabled
+                    />
+                  )
+                }
+
+                <Button variant="contained" onClick={handleAddManualReservation}>
                   Agregar
                 </Button>
-              </Box>
+                
+              </Stack>
             </>
           )}
         </DialogContent>
         <DialogActions>
-          {dialogTurn && (
-            <Tooltip title="Quitar 1 cupo (si queda en 0, marca el turno como expirado)">
-              <Button color="error" startIcon={<DeleteOutlineIcon />} onClick={async () => {
-                await handleDeleteSlot(dialogTurn);
-                const refreshed = turns.find(t => t.id === dialogTurn.id);
-                if (!refreshed) setDialogTurn(null); else setDialogTurn(refreshed);
-              }}>
-                Eliminar cupo
-              </Button>
-            </Tooltip>
-          )}
-          <Button onClick={() => setDialogTurn(null)}>Cerrar</Button>
-        </DialogActions>
+  <Button
+    color="error"
+    onClick={async () => {
+      // Si querés cancelar solo la primera reserva como ejemplo:
+      if ((dialogTurn.reservations || []).length === 0) return;
+      const reservation = dialogTurn.reservations[0]; // o mapear según la que el usuario elija
+      await handleCancelReservation(dialogTurn.id, reservation.uid);
+      setDialogTurn(null);
+    }}
+  >
+    Cancelar reserva
+  </Button>
+
+  <Button onClick={() => setDialogTurn(null)}>Cerrar</Button>
+</DialogActions>
       </Dialog>
 
       {/* Toasts */}

@@ -1,48 +1,104 @@
-import React, { useState } from 'react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth, db } from '../firebase';
-import { useNavigate } from 'react-router-dom';
-import { Box, TextField, Button, Typography } from '@mui/material';
-import { doc, getDoc } from 'firebase/firestore';
+import React, { useState } from "react";
+import {
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+} from "firebase/auth";
+import { auth, db, googleProvider } from "../firebase";
+import { useNavigate } from "react-router-dom";
+import { Box, TextField, Button, Typography, Divider } from "@mui/material";
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
 export default function Login() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
   const navigate = useNavigate();
+
+  const routeByRole = (userData) => {
+    if (userData?.role === "place") {
+      navigate("/place-dashboard");
+    } else if (userData?.role === "user") {
+      navigate("/user-dashboard");
+    } else {
+      // fallback: si no hay rol, lo mandamos a user dashboard
+      navigate("/user-dashboard");
+    }
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    setError('');
+    setError("");
 
     try {
       // Autenticación con Firebase
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
+      // Bloquear si el email no está verificado (solo para email/password)
+      if (!user.emailVerified) {
+        await signOut(auth);
+        setError("Debés verificar tu email antes de ingresar. Revisá tu bandeja de entrada.");
+        return;
+      }
+
       // Obtener documento del usuario en Firestore
-      const userDocRef = doc(db, 'users', user.uid);
+      const userDocRef = doc(db, "users", user.uid);
       const userDoc = await getDoc(userDocRef);
 
       if (!userDoc.exists()) {
-        setError('Usuario no registrado en Firestore');
+        setError("Usuario no registrado en Firestore.");
         return;
       }
 
       const userData = userDoc.data();
-      console.log('Datos del usuario:', userData);
-
-      // Redirección según rol
-      if (userData.role === 'place') {
-        navigate('/place-dashboard');
-      } else if (userData.role === 'user') {
-        navigate('/user-dashboard');
-      } else {
-        setError('Rol de usuario desconocido');
-      }
+      routeByRole(userData);
     } catch (err) {
-      console.error('Error al iniciar sesión:', err);
-      setError('Credenciales incorrectas o usuario no registrado.');
+      console.error("Error al iniciar sesión:", err);
+      if (err.code === "auth/invalid-credential" || err.code === "auth/wrong-password") {
+        setError("Credenciales incorrectas.");
+      } else if (err.code === "auth/user-not-found") {
+        setError("Usuario no registrado.");
+      } else if (err.code === "auth/too-many-requests") {
+        setError("Demasiados intentos. Probá más tarde.");
+      } else {
+        setError("No se pudo iniciar sesión.");
+      }
+    }
+  };
+
+  const handleLoginWithGoogle = async () => {
+    setError("");
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+
+      // Para Google, emailVerified viene true por defecto
+      const userRef = doc(db, "users", user.uid);
+      const snap = await getDoc(userRef);
+
+      // Si no existe el doc, lo creamos con rol "user" por defecto
+      if (!snap.exists()) {
+        await setDoc(userRef, {
+          userId: user.uid,
+          email: user.email,
+          name: user.displayName || "",
+          role: "user",
+          createdAt: serverTimestamp(),
+          // Podés guardar photoURL, phoneNumber, etc.
+        });
+        routeByRole({ role: "user" });
+        return;
+      }
+
+      routeByRole(snap.data());
+    } catch (err) {
+      console.error("Google Sign-In error:", err);
+      if (err.code === "auth/popup-closed-by-user") {
+        setError("Inicio de sesión cancelado.");
+      } else {
+        setError("No se pudo iniciar sesión con Google.");
+      }
     }
   };
 
@@ -90,6 +146,13 @@ export default function Login() {
       color: "red",
       fontSize: "0.9rem",
     },
+    googleBtn: {
+      marginTop: 10,
+      backgroundColor: "#fff",
+      color: "#333",
+      border: "1px solid #ddd",
+      fontWeight: 700,
+    },
   };
 
   return (
@@ -115,6 +178,11 @@ export default function Login() {
         {error && <Typography style={styles.error}>{error}</Typography>}
         <Button variant="contained" type="submit" style={styles.button}>
           Iniciar Sesión
+        </Button>
+
+        <Divider sx={{ my: 1 }} />
+        <Button variant="outlined" onClick={handleLoginWithGoogle} style={styles.googleBtn}>
+          Continuar con Google
         </Button>
       </form>
     </Box>

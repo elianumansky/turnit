@@ -1,12 +1,10 @@
-
 // firebase.js
-// Import the functions you need from the SDKs you need
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
-import { getAnalytics } from "firebase/analytics";
+import { getAnalytics, isSupported } from "firebase/analytics";
 
-// Your web app's Firebase configuration
+// Tu config
 const firebaseConfig = {
   apiKey: "AIzaSyDRSu_QvAxGF8tdnprkFCu277rMu5l1ByE",
   authDomain: "turnit-a04c7.firebaseapp.com",
@@ -14,13 +12,24 @@ const firebaseConfig = {
   storageBucket: "turnit-a04c7.firebasestorage.app",
   messagingSenderId: "802491077395",
   appId: "1:802491077395:web:6f0b42857330335330c0e6",
-  measurementId: "G-E7TXQPQDNM"
+  measurementId: "G-E7TXQPQDNM",
 };
 
+// Init
+export const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+export const db = getFirestore(app);
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const analytics = getAnalytics(app);
+// Google provider para “Continuar con Google”
+export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: "select_account" });
 
-export { app, auth, db };
+// Analytics (solo si el entorno lo soporta — evita errores en SSR)
+let analytics;
+isSupported()
+  .then((yes) => {
+    if (yes) analytics = getAnalytics(app);
+  })
+  .catch(() => { /* noop */ });
+
+export { analytics };

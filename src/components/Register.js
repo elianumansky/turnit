@@ -1,5 +1,10 @@
 import React, { useState } from "react";
-import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
+import {
+  createUserWithEmailAndPassword,
+  updateProfile,
+  sendEmailVerification,
+  signOut,
+} from "firebase/auth";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { TextField, Button, Typography, Box } from "@mui/material";
@@ -45,7 +50,7 @@ export default function Register() {
       // 1) Crear usuario en Auth
       const { user } = await createUserWithEmailAndPassword(auth, email, password);
 
-      // 2) Setear displayName en Auth (CLAVE para que luego salga el nombre al reservar)
+      // 2) Setear displayName en Auth (para ver el nombre en reservas)
       const cleanName = name.trim();
       if (cleanName.length > 0) {
         await updateProfile(user, { displayName: cleanName });
@@ -65,13 +70,20 @@ export default function Register() {
         createdAt: serverTimestamp(),
       });
 
-      navigate("/user-dashboard");
+      // 5) Enviar verificación de email y bloquear acceso hasta verificar
+      await sendEmailVerification(user);
+      await signOut(auth);
+
+      alert("Te enviamos un email de verificación. Verificá tu correo y luego iniciá sesión.");
+      navigate("/login");
     } catch (err) {
       console.error("Error al registrar el usuario:", err);
       if (err.code === "auth/email-already-in-use") {
         setError("El correo electrónico ya está registrado.");
       } else if (err.code === "auth/weak-password") {
         setError("La contraseña debe tener al menos 6 caracteres.");
+      } else if (err.code === "auth/invalid-email") {
+        setError("El email no es válido.");
       } else {
         setError("Error al registrar el usuario. Revisa los datos e intenta nuevamente.");
       }
