@@ -181,13 +181,16 @@ export default function UserDashboard({ user }) {
   };
 
   const toggleFavorite = async (placeId) => {
-    if (!user?.uid) return;
-    const ref = doc(db, "users", user.uid);
-    const snap = await getDoc(ref);
-    const arr = snap.exists() ? (snap.data().favoritePlaces || []) : [];
-    const updated = arr.includes(placeId) ? arr.filter(f => f !== placeId) : [...arr, placeId];
-    await updateDoc(ref, { favoritePlaces: updated });
-  };
+  if (!user?.uid) return;
+  const ref = doc(db, "users", user.uid);
+  const snap = await getDoc(ref);
+  const arr = snap.exists() ? (snap.data().favoritePlaces || []) : [];
+  const updated = arr.includes(placeId) ? arr.filter(f => f !== placeId) : [...arr, placeId];
+  await updateDoc(ref, { favoritePlaces: updated });
+
+  setFavorites(updated);
+};
+
 
   const styles = {
     container: { p: 3, minHeight: "100vh", background: "linear-gradient(135deg,#4e54c8,#8f94fb)", color: "#fff" },

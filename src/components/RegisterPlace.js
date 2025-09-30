@@ -35,6 +35,24 @@ export default function RegisterPlace() {
     e.preventDefault();
     setError("");
     setLoading(true);
+    const fetchCoordinates = async (address) => {
+  try {
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`
+    );
+    const data = await response.json();
+    if (data.length > 0) {
+      return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+    } else {
+      console.warn("No se pudo obtener la ubicación exacta");
+      return null;
+    }
+  } catch (error) {
+    console.error("Error al obtener coordenadas:", error);
+    return null;
+  }
+};
+
 
     if (!email || !password || !placeName || !address || categories.length === 0) {
       setError("Completa todos los campos y seleccioná al menos una categoría");
@@ -56,6 +74,8 @@ export default function RegisterPlace() {
       const placesRef = collection(db, "places");
       const newPlaceRef = doc(placesRef); // ID autogenerado
       const placeId = newPlaceRef.id;
+      const coords = await fetchCoordinates(address);
+
 
       await setDoc(newPlaceRef, {
         placeId,
@@ -64,7 +84,7 @@ export default function RegisterPlace() {
         email: user.email,
         address,
         categories,
-        // campos para lo nuevo:
+        coordinates: coords || null, // <-- guardamos lat/lng
         services: [],             // dueño podrá cargarlos luego
         flexibleEnabled: false,   // podés encenderlo desde el dashboard
         depositPercent: 0,        // configurable en el dashboard

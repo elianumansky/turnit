@@ -150,24 +150,30 @@ export default function PlaceDashboard({ user }) {
 const handleCancelReservation = async (turnId, reservationUid) => {
   try {
     const ref = doc(db, "turnos", turnId);
+
     await runTransaction(db, async (tx) => {
       const snap = await tx.get(ref);
       if (!snap.exists()) throw new Error("Turno inexistente");
       const t = snap.data();
 
+      // Filtrar la reserva específica
       const reservations = (t.reservations || []).filter(r => r.uid !== reservationUid);
-      const slotsAvailable = Number(t.slots ?? 1) - reservations.length;
+
+      // Slots disponibles: sumamos 1 al cancelar
+      const slotsAvailable = Number(t.slotsAvailable ?? t.slots ?? 1) + 1;
 
       tx.update(ref, {
         reservations,
-        slotsAvailable: slotsAvailable < 0 ? 0 : slotsAvailable
+        slotsAvailable
       });
     });
+
     setToast({ open: true, sev: "success", msg: "Reserva cancelada." });
   } catch (e) {
     setToast({ open: true, sev: "error", msg: e.message || "No se pudo cancelar la reserva." });
   }
 };
+
 
 
   const dayAgenda = useMemo(() => {
@@ -990,17 +996,42 @@ const handleCancelReservation = async (turnId, reservationUid) => {
               <Divider sx={{ my: 2 }} />
 
               <Typography variant="subtitle1" sx={{ mb: 1 }}>Reservas</Typography>
-              {(dialogTurn.reservations || []).length === 0 ? (
-                <Typography color="text.secondary">Sin reservas.</Typography>
-              ) : (
-                <Stack spacing={1}>
-                  {dialogTurn.reservations.map((r, i) => (
-                    <Box key={i} sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <Typography>{r.name}{r.serviceName ? ` · ${r.serviceName}` : ""}{r.durationMinutes ? ` · ${r.durationMinutes} min` : ""}</Typography>
-                    </Box>
-                  ))}
-                </Stack>
-              )}
+{(dialogTurn.reservations || []).length === 0 ? (
+  <Typography color="text.secondary">Sin reservas.</Typography>
+) : (
+  <Stack spacing={1}>
+    {dialogTurn.reservations.map((r, i) => (
+      <Box
+        key={i}
+        sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+      >
+        <Typography>
+          {r.name}{r.serviceName ? ` · ${r.serviceName}` : ""}
+          {r.durationMinutes ? ` · ${r.durationMinutes} min` : ""}
+        </Typography>
+
+        {/* Botón para cancelar esta reserva */}
+        <Button
+          size="small"
+          color="error"
+          variant="outlined"
+          onClick={async () => {
+            await handleCancelReservation(dialogTurn.id, r.uid);
+            // Opcional: actualizar el diálogo localmente
+            setDialogTurn((prev) => ({
+              ...prev,
+              reservations: (prev.reservations || []).filter(res => res.uid !== r.uid),
+              slotsAvailable: (prev.slotsAvailable ?? prev.slots ?? 1) + 1,
+            }));
+          }}
+        >
+          Cancelar
+        </Button>
+      </Box>
+    ))}
+  </Stack>
+)}
+
 
               <Divider sx={{ my: 2 }} />
 
@@ -1075,7 +1106,7 @@ const handleCancelReservation = async (turnId, reservationUid) => {
       setDialogTurn(null);
     }}
   >
-    Cancelar reserva
+    Cancelar todas las reservas
   </Button>
 
   <Button onClick={() => setDialogTurn(null)}>Cerrar</Button>
