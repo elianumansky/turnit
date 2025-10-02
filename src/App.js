@@ -1,8 +1,21 @@
+// src/App.js
 import React, { useState, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "./firebase";
 import { collection, query, where, getDocs } from "firebase/firestore";
+
+// Leaflet (estilos + fix de íconos para marcadores)
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
+import marker2x from "leaflet/dist/images/marker-icon-2x.png";
+import marker1x from "leaflet/dist/images/marker-icon.png";
+import markerShadow from "leaflet/dist/images/marker-shadow.png";
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: marker2x,
+  iconUrl: marker1x,
+  shadowUrl: markerShadow,
+});
 
 // Componentes
 import Start from "./components/Start";
@@ -27,7 +40,7 @@ function RequireVerified({ user, children }) {
 
 function App() {
   const [user, setUser] = useState(null);
-  const [isPlace, setIsPlace] = useState(false); // dueño de lugar (no existe staff)
+  const [isPlace, setIsPlace] = useState(false); // dueño de lugar
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -36,7 +49,7 @@ function App() {
         if (currentUser) {
           setUser(currentUser);
 
-          // ✅ SOLO dueños: existe un place con ownerId === uid
+          // Dueño de lugar = existe un place con ownerId === uid
           const qOwner = query(collection(db, "places"), where("ownerId", "==", currentUser.uid));
           const ownerSnap = await getDocs(qOwner);
           setIsPlace(!ownerSnap.empty);
@@ -60,13 +73,13 @@ function App() {
   return (
     <Router>
       <Routes>
-        {/* públicas */}
+        {/* Públicas */}
         <Route path="/" element={<Start />} />
         <Route path="/register" element={<Register />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register-place" element={<RegisterPlace />} />
 
-        {/* protegidas (requieren verificación) */}
+        {/* Protegidas (requieren verificación) */}
         <Route
           path="/reserve-turn"
           element={
