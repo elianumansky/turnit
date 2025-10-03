@@ -87,6 +87,14 @@ export default function UserDashboard({ user }) {
       if (loc?.lat && loc?.lng) setUserLocation(loc);
     })();
   }, [user]);
+  useEffect(() => {
+  if (!userLocation && navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(pos => {
+      setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+    });
+  }
+}, [userLocation]);
+
 
   // ----- favoritos -----
   useEffect(() => {
@@ -529,6 +537,10 @@ export default function UserDashboard({ user }) {
       });
     return hadAnyPast(myPastTurns) || hadAnyPast(myFutureTurns);
   };
+  const hasReviewedPlace = (placeId) => {
+  return reviews.some(r => r.userId === user.uid);
+};
+
 
   const submitReview = async (placeId) => {
     const wc = wordsCount;
@@ -727,7 +739,7 @@ export default function UserDashboard({ user }) {
                 )}
 
                 {/* Form de reseña (si tuvo algún turno pasado en este lugar) */}
-                {canReviewForPlace(selectedPlace.id) && (
+                {canReviewForPlace(selectedPlace.id) && !hasReviewedPlace(selectedPlace.id) && (
                   <Box sx={{ mt: 2, p: 2, border: "1px dashed #ccc", borderRadius: 2 }}>
                     <Typography variant="subtitle1">Dejar reseña</Typography>
                     <Box sx={{ display:"flex", alignItems:"center", gap:2, mt:1, flexWrap:"wrap" }}>
