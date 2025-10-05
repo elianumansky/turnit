@@ -15,16 +15,23 @@ import {
 } from "@mui/material";
 
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+
 import { signOut } from "firebase/auth";
+
 import { useNavigate } from "react-router-dom";
 
 import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
+
 import { format, parse, startOfWeek, getDay } from "date-fns";
+
 import es from "date-fns/locale/es";
+
 import "react-big-calendar/lib/css/react-big-calendar.css";
 
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+
 import L from "leaflet";
+
 import "leaflet/dist/leaflet.css";
 
 const locales = { es };
@@ -52,6 +59,7 @@ const defaultIcon = new L.Icon({
   shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
   iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -28], shadowSize: [41, 41],
 });
+
 const selectedIcon = new L.Icon({
   iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
   shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
@@ -64,6 +72,20 @@ function FlyTo({ lat, lng }) {
     if (lat && lng) map.flyTo([lat, lng], 14, { duration: 0.5 });
   }, [lat, lng, map]);
   return null;
+}
+async function geocodeAddress(address) {
+  try {
+    const resp = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`,
+      { headers: { "User-Agent": "TurnIt-App/1.0 (contacto@turnit.com)" } }
+    );
+    const data = await resp.json();
+    if (!data || !data[0]) throw new Error("No se pudo geocodificar la dirección");
+    return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+  } catch (err) {
+    console.error("Error al geocodificar:", err);
+    return null;
+  }
 }
 
 export default function UserDashboard({ user }) {
@@ -84,34 +106,50 @@ export default function UserDashboard({ user }) {
   const [loadingMyTurns, setLoadingMyTurns] = useState(true);
 
   const [favorites, setFavorites] = useState([]);
-
   const [confirmTurn, setConfirmTurn] = useState(null);
+  const [profileAddress, setProfileAddress] = useState("");
+
   const [selectedServiceId, setSelectedServiceId] = useState("");
   const [selectedOptionId, setSelectedOptionId] = useState("");
 
   const [toast, setToast] = useState({ open: false, msg: "", sev: "success" });
 
   const [userLocation, setUserLocation] = useState(null); // {lat, lng}
+  const [profileName, setProfileName] = useState(user?.displayName || ""); // editable name
+  const [profileLat, setProfileLat] = useState(""); // editable lat
+  const [profileLng, setProfileLng] = useState(""); // editable lng
+  const [savingProfile, setSavingProfile] = useState(false);
 
   // Utils
   const safeAvg = (avg) => Math.max(0, Math.min(5, Number(avg || 0)));
 
-  // Ubicación de usuario
+  // Load user profile name/location
   useEffect(() => {
     (async () => {
       if (!user?.uid) return;
       try {
         const uref = doc(db, "users", user.uid);
         const usnap = await getDoc(uref);
-        const loc = usnap.exists() ? usnap.data().location : null;
-        if (loc?.lat && loc?.lng) {
-          setUserLocation(loc);
-        } else if ("geolocation" in navigator) {
-          navigator.geolocation.getCurrentPosition(
-            (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-            () => {},
-            { enableHighAccuracy: true, timeout: 5000 }
-          );
+        if (usnap.exists()) {
+          const u = usnap.data();
+          const loc = u.location || null;
+          if (typeof u.name === "string") setProfileName(u.name);
+          if (loc?.lat && loc?.lng) {
+            setUserLocation(loc);
+            setProfileLat(String(loc.lat));
+            setProfileLng(String(loc.lng));
+          } else if ("geolocation" in navigator) {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => {
+                const autoLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                setUserLocation(autoLoc);
+                setProfileLat(String(autoLoc.lat));
+                setProfileLng(String(autoLoc.lng));
+              },
+              () => {},
+              { enableHighAccuracy: true, timeout: 5000 }
+            );
+          }
         }
       } catch {}
     })();
@@ -151,7 +189,6 @@ export default function UserDashboard({ user }) {
 
   // Reseñas: promedio robusto por lugar (per-place listeners)
   const [ratingsByPlace, setRatingsByPlace] = useState({}); // { [placeId]: {avg,count,myReviewExists:boolean} }
-
   useEffect(() => {
     // Clean up previous listeners
     let unsubs = [];
@@ -180,7 +217,7 @@ export default function UserDashboard({ user }) {
           }));
         },
         () => {
-          // If fails, keep previous values; no-op
+          // no-op
         }
       );
       unsubs.push(unsub);
@@ -349,6 +386,7 @@ export default function UserDashboard({ user }) {
 
   // Reservar
   const [reserveBusyIds, setReserveBusyIds] = useState(new Set());
+
   const handleConfirmReserve = async () => {
     if (!confirmTurn || !user?.uid) return;
     if (reserveBusyIds.has(confirmTurn.id)) return;
@@ -358,6 +396,7 @@ export default function UserDashboard({ user }) {
       const turnSnap = await getDoc(turnRef);
       if (!turnSnap.exists()) throw new Error("El turno ya no existe.");
       const t0 = turnSnap.data();
+
       const placeRef = doc(db, "places", t0.placeId);
       const placeSnap = await getDoc(placeRef);
       const p = placeSnap.exists() ? placeSnap.data() : {};
@@ -370,9 +409,12 @@ export default function UserDashboard({ user }) {
           const data = s.data();
           const avail = Number(data.slotsAvailable ?? data.slots ?? 0);
           if (avail <= 0) throw new Error("El turno ya fue reservado.");
+
           const reservations = Array.isArray(data.reservations) ? [...data.reservations] : [];
           if (reservations.some(r => r.uid === user.uid)) throw new Error("Ya tenés reserva en este turno.");
+
           const resUids = new Set([...(data.reservationUids || []), user.uid]);
+
           reservations.push({
             uid: user.uid,
             name: user.displayName || user.email || "Cliente",
@@ -383,13 +425,15 @@ export default function UserDashboard({ user }) {
             depositPercent: Number(p.depositPercent || 0),
             depositDue: 0,
           });
+
+      
           tx.update(turnRef, {
-            slotsAvailable: avail - 1,
-            reservationUids: Array.from(resUids),
-            reservations,
-            placeName: data.placeName || selectedPlace?.name || "—",
-            status: "available"
-          });
+  slotsAvailable: avail - 1,
+  reservationUids: Array.from(resUids),
+  reservations,
+  placeName: data.placeName || selectedPlace?.name || "—", // 👈 restaurado
+  status: "available"
+});
         });
       } else {
         if (!selectedService || !selectedOption) {
@@ -412,6 +456,7 @@ export default function UserDashboard({ user }) {
         const allSnap = await getDocs(qBlocks);
         const byTime = {};
         allSnap.docs.forEach(d => { const td = d.data(); byTime[td.time] = { id: d.id, ...td }; });
+
         const blockDocs = neededTimes.map(tm => byTime[tm]).filter(Boolean);
         if (blockDocs.length < neededTimes.length) throw new Error("No hay disponibilidad contigua suficiente.");
         for (const b of blockDocs) {
@@ -426,6 +471,7 @@ export default function UserDashboard({ user }) {
           const first = sFirst.data();
           const avail = Number(first.slotsAvailable ?? first.slots ?? 0);
           if (avail <= 0) throw new Error("El turno ya fue reservado.");
+
           const reservations = Array.isArray(first.reservations) ? [...first.reservations] : [];
           if (reservations.some(r => r.uid === user.uid)) throw new Error("Ya tenés reserva en este turno.");
 
@@ -441,15 +487,16 @@ export default function UserDashboard({ user }) {
             depositDue: Math.round(Number(selectedOption.price) * Number(p.depositPercent || 0) / 100),
           });
 
+          
           tx.update(firstRef, {
-            durationMinutes: need,
-            slotsAvailable: avail - 1,
-            reservationUids: [...(first.reservationUids || []), user.uid],
-            reservations,
-            placeName: first.placeName || selectedPlace?.name || "—",
-            mode: "flex",
-            status: "available"
-          });
+  durationMinutes: need,
+  slotsAvailable: avail - 1,
+  reservationUids: [...(first.reservationUids || []), user.uid],
+  reservations,
+  placeName: first.placeName || selectedPlace?.name || "—", // 👈 restaurado
+  mode: "flex",
+  status: "available"
+});
         });
       }
 
@@ -524,7 +571,6 @@ export default function UserDashboard({ user }) {
             }
           };
         }
-
         return { recreate: null };
       });
 
@@ -535,9 +581,11 @@ export default function UserDashboard({ user }) {
           const hh2 = pad2(start.getHours());
           const mm2 = pad2(start.getMinutes());
           const timeStr = `${hh2}:${mm2}`;
+
           const clashQ = query(collection(db, "turnos"), where("placeId", "==", placeId), where("date", "==", baseDate), where("time", "==", timeStr));
           const clashSnap = await getDocs(clashQ);
           if (!clashSnap.empty) continue;
+
           await addDoc(collection(db, "turnos"), {
             placeId,
             placeName,
@@ -567,7 +615,6 @@ export default function UserDashboard({ user }) {
   const [reviewComment, setReviewComment] = useState("");
   const maxWords = 60;
   const wordsCount = (reviewComment || "").trim().split(/\s+/).filter(Boolean).length;
-
   const hasMyReview = (placeId) => !!ratingsByPlace[placeId]?.myReviewExists;
   const canReviewForPlace = (placeId) => myPastTurns.some(t => t.placeId === placeId) && !hasMyReview(placeId);
 
@@ -612,6 +659,55 @@ export default function UserDashboard({ user }) {
     }
   };
 
+  // Guardar perfil (nombre y ubicación)
+  const saveProfile = async () => {
+  if (!user?.uid) {
+    setToast({ open: true, msg: "No hay usuario válido.", sev: "error" });
+    return;
+  }
+  setSavingProfile(true);
+  try {
+    let coords = userLocation;
+    if (profileAddress.trim()) {
+      coords = await geocodeAddress(profileAddress.trim());
+    }
+    const uref = doc(db, "users", user.uid);
+    await setDoc(uref, {
+      name: (profileName || "").trim(),
+      location: coords,
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+    setUserLocation(coords);
+    setToast({ open: true, msg: "Perfil actualizado ✅", sev: "success" });
+  } catch (e) {
+    console.error("Error al guardar perfil:", e);
+    setToast({ open: true, msg: "No se pudo actualizar el perfil.", sev: "error" });
+  } finally {
+    setSavingProfile(false);
+  }
+};
+
+  const fillLocationFromGPS = async () => {
+    if (!("geolocation" in navigator)) {
+      setToast({ open: true, msg: "GPS no disponible en el navegador.", sev: "warning" });
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setProfileLat(String(lat));
+        setProfileLng(String(lng));
+        setUserLocation({ lat, lng });
+        setToast({ open: true, msg: "Ubicación detectada por GPS.", sev: "info" });
+      },
+      () => {
+        setToast({ open: true, msg: "No se pudo obtener ubicación.", sev: "error" });
+      },
+      { enableHighAccuracy: true, timeout: 5000 }
+    );
+  };
+
   // Render
   return (
     <Box sx={styles.container}>
@@ -631,6 +727,7 @@ export default function UserDashboard({ user }) {
           <Tab label="Mis reservas" />
           <Tab label="Historial" />
           <Tab label="Favoritos" />
+          <Tab label="Perfil" />
         </Tabs>
       </Box>
 
@@ -769,21 +866,17 @@ export default function UserDashboard({ user }) {
                                 <Typography variant="body2" color="text.secondary">({ratingData.count || 0})</Typography>
                               </Box>
                             </Box>
-
                             {(p.categories || []).map((cat) => (
                               <Chip key={cat} label={cat} size="small" color="info" sx={{ mr: 0.5, mt: 0.5 }} />
                             ))}
-
                             {p.description && (
                               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                                 {p.description}
                               </Typography>
                             )}
-
                             {userLocation && Number.isFinite(km) && (
                               <Chip sx={{ mt: 1 }} size="small" label={`${km.toFixed(1)} km`} />
                             )}
-
                             <Chip
                               sx={{ mt: 1 }}
                               label={(favorites || []).includes(p.id) ? "★ Favorito" : "☆ Agregar a favoritos"}
@@ -1039,6 +1132,47 @@ export default function UserDashboard({ user }) {
           )}
         </Box>
       )}
+
+      {/* TAB 4: Perfil */}
+{tab === 4 && (
+  <Box sx={{ mt: 2, ...styles.whitePanel }}>
+    <Typography variant="h6">Editar perfil</Typography>
+    <Grid container spacing={2} sx={{ mt: 1 }}>
+      <Grid item xs={12} md={6}>
+        <TextField
+          label="Nombre"
+          fullWidth
+          value={profileName}
+          onChange={(e) => setProfileName(e.target.value)}
+          placeholder="Tu nombre"
+        />
+      </Grid>
+      <Grid item xs={12} md={6}>
+        <TextField
+          label="Dirección"
+          fullWidth
+          value={profileAddress}
+          onChange={(e) => setProfileAddress(e.target.value)}
+          placeholder="Ej: Av. Corrientes 1234, Buenos Aires"
+        />
+      </Grid>
+      <Grid item xs={12} md={6}>
+        <Button variant="outlined" onClick={fillLocationFromGPS}>
+          Usar ubicación actual (GPS)
+        </Button>
+      </Grid>
+      <Grid item xs={12} md={6} sx={{ textAlign: { xs: "left", md: "right" } }}>
+        <Button variant="contained" onClick={saveProfile} disabled={savingProfile}>
+          {savingProfile ? "Guardando..." : "Guardar perfil"}
+        </Button>
+      </Grid>
+    </Grid>
+    <Divider sx={{ my: 2 }} />
+    <Typography variant="body2" color="text.secondary">
+      Tu perfil se guarda en Firestore bajo users/{user?.uid}. Ahora podés escribir tu dirección y se convertirá automáticamente en coordenadas.
+    </Typography>
+  </Box>
+)}
 
       {/* Confirmación de reserva */}
       <Dialog open={!!confirmTurn} onClose={() => setConfirmTurn(null)}>
