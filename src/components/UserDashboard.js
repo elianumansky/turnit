@@ -17,21 +17,15 @@ import {
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 
 import { signOut } from "firebase/auth";
-
 import { useNavigate } from "react-router-dom";
 
 import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
-
 import { format, parse, startOfWeek, getDay } from "date-fns";
-
 import es from "date-fns/locale/es";
-
 import "react-big-calendar/lib/css/react-big-calendar.css";
 
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
-
 import L from "leaflet";
-
 import "leaflet/dist/leaflet.css";
 
 const locales = { es };
@@ -39,6 +33,29 @@ const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales
 
 const timeToDate = (dateStr, timeStr) => new Date(`${dateStr}T${timeStr}:00`);
 const pad2 = (n) => String(n).padStart(2, "0");
+
+// === Helpers para superposición (faltaban en tu archivo) ===
+const computeStartEnd = (dateStr, timeStr, durationMin) => {
+  const start = new Date(`${dateStr}T${timeStr || "00:00"}:00`);
+  const end = new Date(start.getTime() + Number(durationMin || 60) * 60000);
+  return { start, end };
+};
+const overlaps = (aStart, aEnd, bStart, bEnd) =>
+  aStart.getTime() < bEnd.getTime() && bStart.getTime() < aEnd.getTime();
+
+// Próximas ocurrencias para planes recurrentes
+const getNextOccurrences = (startFromDateStr, weekday, timeStr, frequencyWeeks, count = 4) => {
+  const out = [];
+  const base = startFromDateStr ? new Date(`${startFromDateStr}T00:00:00`) : new Date();
+  const delta = (7 + weekday - base.getDay()) % 7;
+  let d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + (delta || 7));
+  for (let i = 0; i < count; i++) {
+    const dateStr = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    out.push({ date: dateStr, time: timeStr });
+    d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7 * frequencyWeeks);
+  }
+  return out;
+};
 
 // Haversine
 const toRad = (v) => (v * Math.PI) / 180;
@@ -59,7 +76,6 @@ const defaultIcon = new L.Icon({
   shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
   iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -28], shadowSize: [41, 41],
 });
-
 const selectedIcon = new L.Icon({
   iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
   shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
@@ -119,6 +135,11 @@ export default function UserDashboard({ user }) {
   const [profileLat, setProfileLat] = useState(""); // editable lat
   const [profileLng, setProfileLng] = useState(""); // editable lng
   const [savingProfile, setSavingProfile] = useState(false);
+
+  // ====== NUEVO: Planes del lugar seleccionado y mis suscripciones ======
+  const [placePlans, setPlacePlans] = useState([]); // planes del lugar seleccionado
+  const [mySubsForPlace, setMySubsForPlace] = useState({}); // { [planId]: {status,...} }
+  const [myAllSubs, setMyAllSubs] = useState([]); // users/{uid}/subscriptions/*
 
   // Utils
   const safeAvg = (avg) => Math.max(0, Math.min(5, Number(avg || 0)));
@@ -190,9 +211,7 @@ export default function UserDashboard({ user }) {
   // Reseñas: promedio robusto por lugar (per-place listeners)
   const [ratingsByPlace, setRatingsByPlace] = useState({}); // { [placeId]: {avg,count,myReviewExists:boolean} }
   useEffect(() => {
-    // Clean up previous listeners
     let unsubs = [];
-    // Attach a reviews listener for each place to compute avg locally
     (places || []).forEach((p) => {
       if (!p?.id) return;
       const qR = query(collection(db, "places", p.id, "reviews"));
@@ -209,16 +228,10 @@ export default function UserDashboard({ user }) {
           const myExists = !!docs.find(d => d.id === user?.uid);
           setRatingsByPlace(prev => ({
             ...prev,
-            [p.id]: {
-              avg: Number.isFinite(avg) ? avg : 0,
-              count,
-              myReviewExists: myExists
-            }
+            [p.id]: { avg: Number.isFinite(avg) ? avg : 0, count, myReviewExists: myExists }
           }));
         },
-        () => {
-          // no-op
-        }
+        () => {}
       );
       unsubs.push(unsub);
     });
@@ -295,6 +308,39 @@ export default function UserDashboard({ user }) {
     }, () => setLoadingMyTurns(false));
     return () => unsub();
   }, [user]);
+
+  // ====== NUEVO: escuchar planes del lugar seleccionado ======
+  useEffect(() => {
+    if (!selectedPlace?.id) { setPlacePlans([]); setMySubsForPlace({}); return; }
+    const qP = query(collection(db, "places", selectedPlace.id, "plans"));
+    const unsub = onSnapshot(qP, async (snap) => {
+      const plans = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setPlacePlans(plans);
+
+      // Traer mi estado de suscripción a cada plan
+      if (!user?.uid) return;
+      const states = {};
+      for (const pl of plans) {
+        try {
+          const sref = doc(db, "places", selectedPlace.id, "plans", pl.id, "subs", user.uid);
+          const ss = await getDoc(sref);
+          if (ss.exists()) states[pl.id] = ss.data();
+        } catch {}
+      }
+      setMySubsForPlace(states);
+    });
+    return () => unsub();
+  }, [selectedPlace?.id, user?.uid]);
+
+  // ====== NUEVO: escuchar todas mis suscripciones (perfil) ======
+  useEffect(() => {
+    if (!user?.uid) return;
+    const qS = query(collection(db, "users", user.uid, "subscriptions"));
+    const unsub = onSnapshot(qS, (snap) => {
+      setMyAllSubs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsub();
+  }, [user?.uid]);
 
   // UI helpers
   const styles = {
@@ -384,23 +430,132 @@ export default function UserDashboard({ user }) {
     }
   };
 
+  // ====== NUEVO: Suscribirse / cancelar ======
+  const subscribeToPlan = async (plan) => {
+    if (!user?.uid || !selectedPlace?.id) return;
+    try {
+      const subId = `${selectedPlace.id}_${plan.id}`;
+      const placeSubRef = doc(db, "places", selectedPlace.id, "plans", plan.id, "subs", user.uid);
+      const userSubRef = doc(db, "users", user.uid, "subscriptions", subId);
+
+      const payload = {
+        userId: user.uid,
+        status: "active",
+        startedAt: serverTimestamp(),
+        placeId: selectedPlace.id,
+        planId: plan.id,
+        snapshot: {
+          title: plan.title || "",
+          type: plan.type || "flat",
+          price: Number(plan.price || 0),
+          billingPeriod: plan.billingPeriod || "monthly",
+          weekday: Number(plan.weekday ?? 1),
+          time: plan.time || "12:00",
+          frequencyWeeks: Number(plan.frequencyWeeks || 1),
+          serviceId: plan.serviceId || "",
+          optionId: plan.optionId || "",
+          startDate: plan.startDate || "",
+          endDate: plan.endDate || ""
+        }
+      };
+
+      await setDoc(placeSubRef, payload, { merge: true });
+      await setDoc(userSubRef, {
+        ...payload,
+        placeName: selectedPlace?.name || "—",
+        planTitle: plan.title || "",
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+
+      setToast({ open: true, msg: "Suscripción activada ✅", sev: "success" });
+      // refrescar estado local
+      setMySubsForPlace(prev => ({ ...prev, [plan.id]: { ...payload } }));
+    } catch (e) {
+      setToast({ open: true, msg: "No se pudo suscribir.", sev: "error" });
+    }
+  };
+
+  const cancelPlan = async (plan, placeIdArg, hard = false) => {
+    const placeId = placeIdArg || selectedPlace?.id;
+    if (!user?.uid || !placeId) return;
+    try {
+      const subId = `${placeId}_${plan.id}`;
+      const placeSubRef = doc(db, "places", placeId, "plans", plan.id, "subs", user.uid);
+      const userSubRef = doc(db, "users", user.uid, "subscriptions", subId);
+
+      if (hard) {
+        await deleteDoc(placeSubRef);
+        await deleteDoc(userSubRef);
+      } else {
+        await setDoc(placeSubRef, { status: "canceled", canceledAt: serverTimestamp() }, { merge: true });
+        await setDoc(userSubRef, { status: "canceled", canceledAt: serverTimestamp(), updatedAt: serverTimestamp() }, { merge: true });
+      }
+
+      setToast({ open: true, msg: "Suscripción cancelada.", sev: "success" });
+      setMySubsForPlace(prev => ({ ...prev, [plan.id]: { ...(prev[plan.id] || {}), status: "canceled" } }));
+    } catch (e) {
+      setToast({ open: true, msg: "No se pudo cancelar.", sev: "error" });
+    }
+  };
+
   // Reservar
   const [reserveBusyIds, setReserveBusyIds] = useState(new Set());
-
   const handleConfirmReserve = async () => {
     if (!confirmTurn || !user?.uid) return;
     if (reserveBusyIds.has(confirmTurn.id)) return;
     setReserveBusyIds(prev => new Set(prev).add(confirmTurn.id));
     try {
+      // 1) Calcular ventana horaria del NUEVO turno
+      const placeRef = doc(db, "places", confirmTurn.placeId);
+      const placeSnap = await getDoc(placeRef);
+      const p = placeSnap.exists() ? placeSnap.data() : {};
+      const mode = p.schedulingMode || (p.flexibleEnabled ? "flex" : "fixed");
+
+      let needMinutes = Number(confirmTurn.durationMinutes || 60);
+      if (mode === "flex") {
+        if (!selectedServiceId || !selectedOptionId) {
+          setToast({ open: true, msg: "Elegí servicio y duración.", sev: "warning" });
+          return;
+        }
+        const svc = (placeById[confirmTurn.placeId]?.services || []).find(s => s.id === selectedServiceId);
+        const opt = (svc?.options || []).find(o => o.id === selectedOptionId);
+        needMinutes = Number(opt?.durationMinutes || needMinutes || 60);
+      }
+      const { start: newStart, end: newEnd } = computeStartEnd(confirmTurn.date, confirmTurn.time, needMinutes);
+
+      // 2) Chequear superposición local con mis turnos futuros (ya escuchados)
+      const hasLocalOverlap = (myFutureTurns || []).some(t => {
+        const { start, end } = computeStartEnd(t.date, t.time, t.durationMinutes || 60);
+        return overlaps(start, end, newStart, newEnd);
+      });
+      if (hasLocalOverlap) {
+        setToast({ open: true, msg: "Ya tenés un turno que se superpone en ese horario.", sev: "error" });
+        return;
+      }
+
+      // 3) Extra: re-chequeo contra Firestore (seguridad/race)
+      const qSameDay = query(
+        collection(db, "turnos"),
+        where("reservationUids", "array-contains", user.uid),
+        where("date", "==", confirmTurn.date)
+      );
+      const snapSameDay = await getDocs(qSameDay);
+      const hasRemoteOverlap = snapSameDay.docs.some(d => {
+        const td = d.data();
+        if (td.status === "canceled") return false;
+        const { start, end } = computeStartEnd(td.date, td.time, td.durationMinutes || 60);
+        return overlaps(start, end, newStart, newEnd);
+      });
+      if (hasRemoteOverlap) {
+        setToast({ open: true, msg: "Ese horario se superpone con otra reserva tuya.", sev: "error" });
+        return;
+      }
+
+      // === RESERVA (igual que tu lógica, con verificación dentro de la TX) ===
       const turnRef = doc(db, "turnos", confirmTurn.id);
       const turnSnap = await getDoc(turnRef);
       if (!turnSnap.exists()) throw new Error("El turno ya no existe.");
       const t0 = turnSnap.data();
-
-      const placeRef = doc(db, "places", t0.placeId);
-      const placeSnap = await getDoc(placeRef);
-      const p = placeSnap.exists() ? placeSnap.data() : {};
-      const mode = p.schedulingMode || (p.flexibleEnabled ? "flex" : "fixed");
 
       if (mode === "fixed") {
         await runTransaction(db, async (tx) => {
@@ -410,11 +565,26 @@ export default function UserDashboard({ user }) {
           const avail = Number(data.slotsAvailable ?? data.slots ?? 0);
           if (avail <= 0) throw new Error("El turno ya fue reservado.");
 
+          // Validación anti-superposición EN TX (consulta del mismo día)
+          const q2 = query(
+            collection(db, "turnos"),
+            where("reservationUids", "array-contains", user.uid),
+            where("date", "==", data.date)
+          );
+          const res2 = await getDocs(q2);
+          const conflict = res2.docs.some(d => {
+            const td = d.data();
+            if (td.id === s.id) return false;
+            if (td.status === "canceled") return false;
+            const { start, end } = computeStartEnd(td.date, td.time, td.durationMinutes || 60);
+            return overlaps(start, end, newStart, newEnd);
+          });
+          if (conflict) throw new Error("Superposición detectada al confirmar. Elegí otro horario.");
+
           const reservations = Array.isArray(data.reservations) ? [...data.reservations] : [];
           if (reservations.some(r => r.uid === user.uid)) throw new Error("Ya tenés reserva en este turno.");
 
           const resUids = new Set([...(data.reservationUids || []), user.uid]);
-
           reservations.push({
             uid: user.uid,
             name: user.displayName || user.email || "Cliente",
@@ -426,23 +596,19 @@ export default function UserDashboard({ user }) {
             depositDue: 0,
           });
 
-      
           tx.update(turnRef, {
-  slotsAvailable: avail - 1,
-  reservationUids: Array.from(resUids),
-  reservations,
-  placeName: data.placeName || selectedPlace?.name || "—", // 👈 restaurado
-  status: "available"
-});
+            slotsAvailable: avail - 1,
+            reservationUids: Array.from(resUids),
+            reservations,
+            placeName: data.placeName || selectedPlace?.name || "—",
+            status: "available"
+          });
         });
       } else {
-        if (!selectedService || !selectedOption) {
-          setToast({ open: true, msg: "Elegí servicio y duración.", sev: "warning" });
-          return;
-        }
+        // FLEX
         const allDur = (services.flatMap(s => s.options || []).map(o => Number(o.durationMinutes)).filter(Boolean));
         const step = Math.min(...allDur) || 30;
-        const need = Number(selectedOption.durationMinutes);
+        const need = needMinutes;
 
         const [hh, mm] = (t0.time || "00:00").split(":").map(Number);
         const baseStart = new Date(`${t0.date}T${pad2(hh)}:${pad2(mm)}:00`);
@@ -472,31 +638,44 @@ export default function UserDashboard({ user }) {
           const avail = Number(first.slotsAvailable ?? first.slots ?? 0);
           if (avail <= 0) throw new Error("El turno ya fue reservado.");
 
+          // Re-validar superposición dentro de TX
+          const q2 = query(
+            collection(db, "turnos"),
+            where("reservationUids", "array-contains", user.uid),
+            where("date", "==", first.date)
+          );
+          const res2 = await getDocs(q2);
+          const conflict = res2.docs.some(d => {
+            const td = d.data();
+            const { start, end } = computeStartEnd(td.date, td.time, td.durationMinutes || 60);
+            return overlaps(start, end, newStart, newEnd);
+          });
+          if (conflict) throw new Error("Superposición detectada al confirmar. Elegí otro horario.");
+
           const reservations = Array.isArray(first.reservations) ? [...first.reservations] : [];
           if (reservations.some(r => r.uid === user.uid)) throw new Error("Ya tenés reserva en este turno.");
 
           reservations.push({
             uid: user.uid,
             name: user.displayName || user.email || "Cliente",
-            serviceId: selectedService.id,
-            serviceName: selectedService.name,
-            optionId: selectedOption.id,
+            serviceId: selectedServiceId,
+            serviceName: (services.find(s => s.id === selectedServiceId)?.name) || null,
+            optionId: selectedOptionId,
             durationMinutes: need,
-            price: Number(selectedOption.price),
+            price: Number((services.find(s => s.id === selectedServiceId)?.options || []).find(o => o.id === selectedOptionId)?.price || 0),
             depositPercent: Number(p.depositPercent || 0),
-            depositDue: Math.round(Number(selectedOption.price) * Number(p.depositPercent || 0) / 100),
+            depositDue: Math.round(Number((services.find(s => s.id === selectedServiceId)?.options || []).find(o => o.id === selectedOptionId)?.price || 0) * Number(p.depositPercent || 0) / 100),
           });
 
-          
           tx.update(firstRef, {
-  durationMinutes: need,
-  slotsAvailable: avail - 1,
-  reservationUids: [...(first.reservationUids || []), user.uid],
-  reservations,
-  placeName: first.placeName || selectedPlace?.name || "—", // 👈 restaurado
-  mode: "flex",
-  status: "available"
-});
+            durationMinutes: need,
+            slotsAvailable: avail - 1,
+            reservationUids: [...(first.reservationUids || []), user.uid],
+            reservations,
+            placeName: first.placeName || selectedPlace?.name || "—",
+            mode: "flex",
+            status: "available"
+          });
         });
       }
 
@@ -661,31 +840,31 @@ export default function UserDashboard({ user }) {
 
   // Guardar perfil (nombre y ubicación)
   const saveProfile = async () => {
-  if (!user?.uid) {
-    setToast({ open: true, msg: "No hay usuario válido.", sev: "error" });
-    return;
-  }
-  setSavingProfile(true);
-  try {
-    let coords = userLocation;
-    if (profileAddress.trim()) {
-      coords = await geocodeAddress(profileAddress.trim());
+    if (!user?.uid) {
+      setToast({ open: true, msg: "No hay usuario válido.", sev: "error" });
+      return;
     }
-    const uref = doc(db, "users", user.uid);
-    await setDoc(uref, {
-      name: (profileName || "").trim(),
-      location: coords,
-      updatedAt: serverTimestamp()
-    }, { merge: true });
-    setUserLocation(coords);
-    setToast({ open: true, msg: "Perfil actualizado ✅", sev: "success" });
-  } catch (e) {
-    console.error("Error al guardar perfil:", e);
-    setToast({ open: true, msg: "No se pudo actualizar el perfil.", sev: "error" });
-  } finally {
-    setSavingProfile(false);
-  }
-};
+    setSavingProfile(true);
+    try {
+      let coords = userLocation;
+      if (profileAddress.trim()) {
+        coords = await geocodeAddress(profileAddress.trim());
+      }
+      const uref = doc(db, "users", user.uid);
+      await setDoc(uref, {
+        name: (profileName || "").trim(),
+        location: coords,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      setUserLocation(coords);
+      setToast({ open: true, msg: "Perfil actualizado ✅", sev: "success" });
+    } catch (e) {
+      console.error("Error al guardar perfil:", e);
+      setToast({ open: true, msg: "No se pudo actualizar el perfil.", sev: "error" });
+    } finally {
+      setSavingProfile(false);
+    }
+  };
 
   const fillLocationFromGPS = async () => {
     if (!("geolocation" in navigator)) {
@@ -728,6 +907,8 @@ export default function UserDashboard({ user }) {
           <Tab label="Historial" />
           <Tab label="Favoritos" />
           <Tab label="Perfil" />
+          {/* NUEVO */}
+          <Tab label="Suscripciones" />
         </Tabs>
       </Box>
 
@@ -894,12 +1075,65 @@ export default function UserDashboard({ user }) {
             </Grid>
           </Grid>
 
-          {/* Calendario + Reseñas */}
+          {/* Calendario + Reseñas + Planes */}
           {selectedPlace && (
             <Box sx={{ mt: 3 }}>
               <Typography variant="h6">{selectedPlace.name}</Typography>
 
-              <Box sx={{ display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap", mb: 1 }}>
+              {/* === NUEVO: Planes del lugar === */}
+              <Box sx={{ mt: 1, p: 2, border: "1px dashed #ccc", borderRadius: 2 }}>
+                <Typography variant="subtitle1">Planes de suscripción del lugar</Typography>
+                {placePlans.length === 0 ? (
+                  <Typography color="text.secondary" sx={{ mt: 1 }}>Este lugar aún no publicó planes.</Typography>
+                ) : (
+                  <Grid container spacing={2} sx={{ mt: 1 }}>
+                    {placePlans.map(pl => {
+                      const myState = mySubsForPlace[pl.id];
+                      const active = myState?.status === "active";
+                      const occPreview = pl.type === "recurring_slot"
+                        ? getNextOccurrences(pl.startDate, Number(pl.weekday ?? 1), pl.time || "12:00", Number(pl.frequencyWeeks || 1), 3)
+                        : [];
+                      return (
+                        <Grid item xs={12} md={6} key={pl.id}>
+                          <Card variant="outlined">
+                            <CardContent>
+                              <Box sx={{ display:"flex", justifyContent:"space-between", alignItems:"start", gap:1, flexWrap:"wrap" }}>
+                                <Box>
+                                  <Typography variant="h6">{pl.title || "—"}</Typography>
+                                  <Typography variant="body2" color="text.secondary">
+                                    {pl.type === "recurring_slot"
+                                      ? `Recurrente · ${["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"][Number(pl.weekday||1)]} ${pl.time} · cada ${pl.frequencyWeeks} sem`
+                                      : "Acceso (sin turnos fijos)"}
+                                    {" · "}Precio: ${Number(pl.price||0)} / {pl.billingPeriod || "monthly"}
+                                  </Typography>
+                                  {occPreview.length > 0 && (
+                                    <Typography variant="body2" sx={{ mt: 0.5 }}>
+                                      Próx.: {occPreview.map(o => `${o.date} ${o.time}`).join(" · ")}
+                                    </Typography>
+                                  )}
+                                </Box>
+                                <Box sx={{ display:"flex", gap:1 }}>
+                                  {active ? (
+                                    <>
+                                      <Chip color="success" label="Activo" />
+                                      <Button color="error" onClick={() => cancelPlan(pl)}>Cancelar</Button>
+                                    </>
+                                  ) : (
+                                    <Button variant="contained" onClick={() => subscribeToPlan(pl)}>Suscribirme</Button>
+                                  )}
+                                </Box>
+                              </Box>
+                            </CardContent>
+                          </Card>
+                        </Grid>
+                      );
+                    })}
+                  </Grid>
+                )}
+              </Box>
+
+              {/* Selección de servicio para reservar */}
+              <Box sx={{ display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap", mb: 1, mt: 2 }}>
                 <TextField
                   select
                   label="Servicio"
@@ -1134,45 +1368,102 @@ export default function UserDashboard({ user }) {
       )}
 
       {/* TAB 4: Perfil */}
-{tab === 4 && (
-  <Box sx={{ mt: 2, ...styles.whitePanel }}>
-    <Typography variant="h6">Editar perfil</Typography>
-    <Grid container spacing={2} sx={{ mt: 1 }}>
-      <Grid item xs={12} md={6}>
-        <TextField
-          label="Nombre"
-          fullWidth
-          value={profileName}
-          onChange={(e) => setProfileName(e.target.value)}
-          placeholder="Tu nombre"
-        />
-      </Grid>
-      <Grid item xs={12} md={6}>
-        <TextField
-          label="Dirección"
-          fullWidth
-          value={profileAddress}
-          onChange={(e) => setProfileAddress(e.target.value)}
-          placeholder="Ej: Av. Corrientes 1234, Buenos Aires"
-        />
-      </Grid>
-      <Grid item xs={12} md={6}>
-        <Button variant="outlined" onClick={fillLocationFromGPS}>
-          Usar ubicación actual (GPS)
-        </Button>
-      </Grid>
-      <Grid item xs={12} md={6} sx={{ textAlign: { xs: "left", md: "right" } }}>
-        <Button variant="contained" onClick={saveProfile} disabled={savingProfile}>
-          {savingProfile ? "Guardando..." : "Guardar perfil"}
-        </Button>
-      </Grid>
-    </Grid>
-    <Divider sx={{ my: 2 }} />
-    <Typography variant="body2" color="text.secondary">
-      Tu perfil se guarda en Firestore bajo users/{user?.uid}. Ahora podés escribir tu dirección y se convertirá automáticamente en coordenadas.
-    </Typography>
-  </Box>
-)}
+      {tab === 4 && (
+        <Box sx={{ mt: 2, ...styles.whitePanel }}>
+          <Typography variant="h6">Editar perfil</Typography>
+          <Grid container spacing={2} sx={{ mt: 1 }}>
+            <Grid item xs={12} md={6}>
+              <TextField
+                label="Nombre"
+                fullWidth
+                value={profileName}
+                onChange={(e) => setProfileName(e.target.value)}
+                placeholder="Tu nombre"
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField
+                label="Dirección"
+                fullWidth
+                value={profileAddress}
+                onChange={(e) => setProfileAddress(e.target.value)}
+                placeholder="Ej: Av. Corrientes 1234, Buenos Aires"
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Button variant="outlined" onClick={fillLocationFromGPS}>
+                Usar ubicación actual (GPS)
+              </Button>
+            </Grid>
+            <Grid item xs={12} md={6} sx={{ textAlign: { xs: "left", md: "right" } }}>
+              <Button variant="contained" onClick={saveProfile} disabled={savingProfile}>
+                {savingProfile ? "Guardando..." : "Guardar perfil"}
+              </Button>
+            </Grid>
+          </Grid>
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="body2" color="text.secondary">
+            Tu perfil se guarda en Firestore bajo users/{user?.uid}. Ahora podés escribir tu dirección y se convertirá automáticamente en coordenadas.
+          </Typography>
+        </Box>
+      )}
+
+      {/* TAB 5: Suscripciones (nuevo) */}
+      {tab === 5 && (
+        <Box sx={{ mt: 2, ...styles.whitePanel }}>
+          <Typography variant="h6">Mis suscripciones</Typography>
+          {myAllSubs.length === 0 ? (
+            <Typography color="text.secondary" sx={{ mt: 1 }}>
+              No tenés suscripciones aún. Mirá los planes en “Reservar turnos”.
+            </Typography>
+          ) : (
+            <Grid container spacing={2} sx={{ mt: 1 }}>
+              {myAllSubs.map(s => {
+                const active = s.status === "active";
+                const plan = s.snapshot || {};
+                const occPreview = plan.type === "recurring_slot"
+                  ? getNextOccurrences(plan.startDate, Number(plan.weekday ?? 1), plan.time || "12:00", Number(plan.frequencyWeeks || 1), 3)
+                  : [];
+                return (
+                  <Grid item xs={12} md={6} key={s.id}>
+                    <Card variant="outlined">
+                      <CardContent>
+                        <Box sx={{ display:"flex", justifyContent:"space-between", alignItems:"start", gap:1, flexWrap:"wrap" }}>
+                          <Box>
+                            <Typography variant="h6">{s.planTitle || plan.title || "Plan"}</Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              Lugar: {s.placeName || s.placeId}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              {plan.type === "recurring_slot"
+                                ? `Recurrente · ${["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"][Number(plan.weekday||1)]} ${plan.time} · cada ${plan.frequencyWeeks} sem`
+                                : "Acceso (sin turnos fijos)"}
+                              {" · "}Precio: ${Number(plan.price||0)} / {plan.billingPeriod || "monthly"}
+                            </Typography>
+                            {occPreview.length > 0 && (
+                              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                                Próx.: {occPreview.map(o => `${o.date} ${o.time}`).join(" · ")}
+                              </Typography>
+                            )}
+                            <Chip size="small" sx={{ mt: 1 }} color={active ? "success" : "default"} label={active ? "Activo" : "Cancelado"} />
+                          </Box>
+                          <Box sx={{ display:"flex", gap:1 }}>
+                            {active ? (
+                              <Button color="error" onClick={() => cancelPlan({ id: s.planId }, s.placeId)}>Cancelar</Button>
+                            ) : (
+                              <Button disabled>Cancelado</Button>
+                            )}
+                          </Box>
+                        </Box>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                );
+              })}
+            </Grid>
+          )}
+        </Box>
+      )}
 
       {/* Confirmación de reserva */}
       <Dialog open={!!confirmTurn} onClose={() => setConfirmTurn(null)}>

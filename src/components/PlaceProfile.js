@@ -23,6 +23,7 @@ import {
   ListItemText,
   FormControl,
   InputLabel,
+  Stack,
 } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 
@@ -30,6 +31,9 @@ import { useNavigate } from "react-router-dom";
 import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+
+// Botón de pago
+import PaymentButton from "../components/PaymentButton";
 
 const markerIcon = new L.Icon({
   iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
@@ -272,6 +276,14 @@ export default function PlaceProfile({ user }) {
             Aún no se guardó ubicación para este lugar.
           </Typography>
         )}
+
+        {/* Botón de pago de prueba */}
+        <Box sx={{ mt: 3 }}>
+          <Typography variant="h6" sx={{ mb: 1 }}>
+            Probar pago de turno
+          </Typography>
+          <PaymentButton turno={{ precio: 500 }} />
+        </Box>
       </Box>
 
       <Snackbar

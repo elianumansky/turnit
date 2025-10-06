@@ -23,6 +23,12 @@ import { format, parse, startOfWeek, getDay } from "date-fns";
 import es from "date-fns/locale/es";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 
+// Recharts (gráficos)
+import {
+  ResponsiveContainer, PieChart, Pie, Cell, Tooltip as RTooltip, Legend,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  LineChart, Line
+} from "recharts";
 
 const locales = { es };
 const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales });
@@ -53,7 +59,6 @@ function reservationLabel(r) {
   if (r && typeof r === "object") return r.name || "Ocupado";
   return "Ocupado";
 }
-
 
 export default function PlaceDashboard({ user }) {
   const navigate = useNavigate();
@@ -503,7 +508,7 @@ export default function PlaceDashboard({ user }) {
     }
   };
 
-  // Cancelar reserva
+  // Cancelar reserva individual
   const handleCancelReservation = async (turn, reservation) => {
     try {
       const result = await runTransaction(db, async (tx) => {
@@ -570,7 +575,7 @@ export default function PlaceDashboard({ user }) {
         return { recreate: null, turnId: turn.id };
       });
 
-      // Optimistic: reflejar de inmediato en el diálogo
+      // Optimistic
       if (result?.turnId && dialogTurn?.id === result.turnId) {
         const tNow = turns.find(t => t.id === result.turnId);
         if (tNow) {
@@ -582,13 +587,13 @@ export default function PlaceDashboard({ user }) {
             ...tNow,
             reservations: newRes,
             slotsAvailable: (tNow.slotsAvailable || 0) + 1,
-            durationMinutes: Math.min(tNow.durationMinutes || 60, tNow.durationMinutes || 60) // será rehidratado por snapshot
+            durationMinutes: Math.min(tNow.durationMinutes || 60, tNow.durationMinutes || 60)
           };
           setDialogTurn(newCopy);
         }
       }
 
-      // reconstrucción fuera de la tx
+      // reconstrucción
       if (result?.recreate) {
         const { placeId, placeName, baseDate, baseStartMs, step, kMore, mode } = result.recreate;
         for (let i = 1; i <= kMore; i++) {
@@ -629,26 +634,24 @@ export default function PlaceDashboard({ user }) {
       setToast({ open: true, sev: "error", msg: e.message || "No se pudo cancelar." });
     }
   };
+
+  // Cancelar todas las reservas del turno
   const handleCancelAllReservations = async (turn) => {
-  try {
-    if (!window.confirm("¿Seguro que querés cancelar todas las reservas de este turno?")) return;
-
-    const turnRef = doc(db, "turnos", turn.id); // usar la colección correcta
-    await updateDoc(turnRef, { 
-      reservations: [],
-      reservationUids: [],
-      slotsAvailable: Number(turn.slots || 0), // restaurar la disponibilidad
-      status: "available"
-    });
-
-    setToast({ open: true, sev: "success", msg: "Se cancelaron todas las reservas." });
-  } catch (err) {
-    console.error(err);
-    setToast({ open: true, sev: "error", msg: "No se pudieron cancelar las reservas." });
-  }
-};
-
-
+    try {
+      if (!window.confirm("¿Seguro que querés cancelar todas las reservas de este turno?")) return;
+      const turnRef = doc(db, "turnos", turn.id);
+      await updateDoc(turnRef, { 
+        reservations: [],
+        reservationUids: [],
+        slotsAvailable: Number(turn.slots || 0),
+        status: "available"
+      });
+      setToast({ open: true, sev: "success", msg: "Se cancelaron todas las reservas." });
+    } catch (err) {
+      console.error(err);
+      setToast({ open: true, sev: "error", msg: "No se pudieron cancelar las reservas." });
+    }
+  };
 
   // Agregar reserva manual (nombre libre)
   const handleAddManualReservation = async () => {
@@ -717,7 +720,6 @@ export default function PlaceDashboard({ user }) {
       const term = (clientQuery || "").trim().toLowerCase();
       if (!term) { setClientOptions([]); return; }
       try {
-        // Necesita campo emailLower en users
         const qU = query(
           collection(db, "users"),
           orderBy("emailLower"),
@@ -788,6 +790,215 @@ export default function PlaceDashboard({ user }) {
       setToast({ open: true, sev: "error", msg: e.message || "No se pudo agregar la reserva." });
     }
   };
+
+  // ---- SUSCRIPCIONES (PLACE) ----
+  const [plans, setPlans] = useState([]);
+  useEffect(() => {
+    if (!placeId) return;
+    const qP = collection(db, "places", placeId, "plans");
+    const unsub = onSnapshot(qP, (snap) => {
+      setPlans(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsub();
+  }, [placeId]);
+
+  const [planForm, setPlanForm] = useState({
+    title: "",
+    type: "recurring_slot", // o "flat"
+    price: 0,
+    billingPeriod: "monthly",
+    weekday: 1,
+    time: "12:00",
+    frequencyWeeks: 2,
+    serviceId: "",
+    optionId: "",
+    startDate: "",
+    endDate: ""
+  });
+
+  const createPlan = async () => {
+    try {
+      const ref = collection(db, "places", placeId, "plans");
+      await addDoc(ref, {
+        ...planForm,
+        price: Number(planForm.price || 0),
+        frequencyWeeks: Number(planForm.frequencyWeeks || 1)
+      });
+      setToast({ open: true, sev: "success", msg: "Plan creado." });
+      setPlanForm({
+        title: "", type: "recurring_slot", price: 0, billingPeriod: "monthly",
+        weekday: 1, time: "12:00", frequencyWeeks: 2, serviceId: "", optionId: "", startDate: "", endDate: ""
+      });
+    } catch {
+      setToast({ open: true, sev: "error", msg: "No se pudo crear el plan." });
+    }
+  };
+  const deletePlan = async (pid) => {
+    try {
+      await deleteDoc(doc(db, "places", placeId, "plans", pid));
+      setToast({ open: true, sev: "success", msg: "Plan eliminado." });
+    } catch {
+      setToast({ open: true, sev: "error", msg: "No se pudo eliminar el plan." });
+    }
+  };
+
+  const getNextOccurrences = (startFromDateStr, weekday, timeStr, frequencyWeeks, count=4) => {
+    const out = [];
+    const base = startFromDateStr ? new Date(`${startFromDateStr}T00:00:00`) : new Date();
+    const delta = (7 + weekday - base.getDay()) % 7;
+    let d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + (delta || 7));
+    for (let i=0;i<count;i++) {
+      const dateStr = `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+      out.push({ date: dateStr, time: timeStr });
+      d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7*frequencyWeeks);
+    }
+    return out;
+  };
+
+  const computeStartEnd = (dateStr, timeStr, durationMin) => {
+    const start = new Date(`${dateStr}T${timeStr || "00:00"}:00`);
+    const end = new Date(start.getTime() + Number(durationMin || 60) * 60000);
+    return { start, end };
+  };
+  const overlaps = (aStart, aEnd, bStart, bEnd) => aStart.getTime() < bEnd.getTime() && bStart.getTime() < aEnd.getTime();
+
+  const generateOccurrencesForSubscriptions = async () => {
+    if (!placeId) return;
+    try {
+      let created=0, skipped=0;
+      for (const plan of plans) {
+        if (plan.type !== "recurring_slot") continue;
+
+        // subs activas
+        const subsSnap = await getDocs(collection(db, "places", placeId, "plans", plan.id, "subs"));
+        const activeSubs = subsSnap.docs.map(d=>({ id:d.id, ...d.data() })).filter(s=>s.status==="active");
+
+        for (const sub of activeSubs) {
+          const occs = getNextOccurrences(plan.startDate || yyyymmdd(new Date()), Number(plan.weekday||1), plan.time || "12:00", Number(plan.frequencyWeeks||2), 4);
+
+          for (const occ of occs) {
+            const qT = query(
+              collection(db, "turnos"),
+              where("placeId", "==", placeId),
+              where("date", "==", occ.date),
+              where("time", "==", occ.time)
+            );
+            const tSnap = await getDocs(qT);
+            if (tSnap.empty) { skipped++; continue; }
+            const tDoc = tSnap.docs[0];
+            const turn = { id: tDoc.id, ...tDoc.data() };
+            if (Number(turn.slotsAvailable ?? turn.slots ?? 0) <= 0 || turn.status==="canceled") { skipped++; continue; }
+
+            const qMineSameDay = query(
+              collection(db, "turnos"),
+              where("reservationUids", "array-contains", sub.userId),
+              where("date", "==", occ.date)
+            );
+            const mineSnap = await getDocs(qMineSameDay);
+            const willStartEnd = computeStartEnd(occ.date, occ.time, turn.durationMinutes || 60);
+            const hasConflict = mineSnap.docs.some(d=> {
+              const td = d.data();
+              const se = computeStartEnd(td.date, td.time, td.durationMinutes || 60);
+              return overlaps(se.start, se.end, willStartEnd.start, willStartEnd.end);
+            });
+            if (hasConflict) { skipped++; continue; }
+
+            await runTransaction(db, async (tx) => {
+              const ref = doc(db, "turnos", turn.id);
+              const s = await tx.get(ref);
+              if (!s.exists()) throw new Error("Turno inexistente");
+              const data = s.data();
+              const avail = Number(data.slotsAvailable ?? data.slots ?? 0);
+              if (avail <= 0) throw new Error("Sin cupo");
+
+              const reservations = Array.isArray(data.reservations) ? [...data.reservations] : [];
+              if (reservations.some(r => r.uid === sub.userId)) return;
+              reservations.push({
+                uid: sub.userId,
+                name: "Suscriptor",
+                serviceId: plan.serviceId || null,
+                optionId: plan.optionId || null,
+                serviceName: (services.find(sv=>sv.id===plan.serviceId)?.name) || null,
+                durationMinutes: Number(data.durationMinutes || 60),
+                price: 0,
+                meta: { subscriptionPlanId: plan.id }
+              });
+              tx.update(ref, {
+                reservations,
+                reservationUids: [...(data.reservationUids || []), sub.userId],
+                slotsAvailable: avail - 1,
+                status: "available"
+              });
+            });
+            created++;
+          }
+        }
+      }
+      setToast({ open: true, sev: "success", msg: `Ocurrencias generadas. Hechas: ${created}, omitidas: ${skipped}` });
+    } catch (e) {
+      setToast({ open: true, sev: "error", msg: e.message || "No se pudo generar." });
+    }
+  };
+
+  // ---- Estadísticas (a partir de turns) ----
+  const stats = useMemo(() => {
+    const byService = new Map(); // name -> {count, revenue}
+    let revenue = 0;
+    let appReservations = 0;
+    let manualReservations = 0;
+
+    // fidelidad: clientes con >=2 reservas completadas
+    const completed = turns.filter(t => t.status === "completed");
+    const reservationsAll = turns.flatMap(t => (t.reservations || []).map(r => ({ r, t })));
+    const completedReservations = completed.flatMap(t => (t.reservations || []).map(r => ({ r, t })));
+    const countByUser = new Map();
+    completedReservations.forEach(({ r }) => {
+      const uid = typeof r === "string" ? r : r?.uid;
+      if (!uid) return;
+      countByUser.set(uid, (countByUser.get(uid) || 0) + 1);
+    });
+    const loyalUsers = Array.from(countByUser.values()).filter(n => n >= 2).length;
+
+    reservationsAll.forEach(({ r }) => {
+      const price = Number(r?.price || 0);
+      revenue += price;
+
+      const name = r?.serviceName || "—";
+      if (!byService.has(name)) byService.set(name, { count: 0, revenue: 0 });
+      const s = byService.get(name);
+      s.count += 1;
+      s.revenue += price;
+
+      const uid = typeof r === "string" ? r : r?.uid;
+      if (uid && String(uid).startsWith("manual-")) manualReservations += 1;
+      else appReservations += 1;
+    });
+
+    // horas pico (por hora)
+    const byHour = new Map();
+    turns.forEach(t => {
+      if (!t?.time) return;
+      const hour = t.time.split(":")[0];
+      byHour.set(hour, (byHour.get(hour) || 0) + 1);
+    });
+
+    const serviceArr = Array.from(byService.entries()).map(([serviceName, v]) => ({
+      serviceName, reservas: v.count, recaudacion: v.revenue
+    })).sort((a,b) => b.recaudacion - a.recaudacion);
+
+    const hourArr = Array.from(byHour.entries()).map(([hour, cnt]) => ({ hour: `${hour}:00`, turnos: cnt }))
+      .sort((a,b)=> Number(a.hour.slice(0,2)) - Number(b.hour.slice(0,2)));
+
+    const totalRes = appReservations + manualReservations;
+    const originArr = [
+      { name: "App", value: appReservations },
+      { name: "Manual", value: manualReservations }
+    ];
+
+    return { revenue, loyalUsers, serviceArr, hourArr, originArr, totalRes };
+  }, [turns]);
+
+  const COLORS = ["#8884d8", "#82ca9d", "#ffc658", "#ff7f7f", "#8dd1e1", "#a4de6c", "#d0ed57"];
 
   // UI
   const styles = {
@@ -889,6 +1100,8 @@ export default function PlaceDashboard({ user }) {
           <Tab label="Turnos flexibles" />
           <Tab label="Publicar manual" />
           <Tab label="Borrar turnos" />
+          <Tab label="Estadísticas" />
+          <Tab label="Suscripciones" />
         </Tabs>
 
         {adminTab === 0 && (
@@ -936,9 +1149,21 @@ export default function PlaceDashboard({ user }) {
 
                   {svcToEdit === s.id && (
                     <Box sx={{ mt: 1, display:"flex", gap:1, flexWrap:"wrap" }}>
-                      <TextField label="Duración (min)" value={optDuration} onChange={(e)=> setOptDuration(e.target.value)} type="number" />
-                      <TextField label="Precio" value={optPrice} onChange={(e)=> setOptPrice(e.target.value)} type="number" />
-                      <Button variant="contained" onClick={addOptionToService}>Agregar opción</Button>
+                      <TextField
+                        label="Duración (min)"
+                        value={optDuration}
+                        onChange={(e)=> setOptDuration(e.target.value)}
+                        type="number"
+                      />
+                      <TextField
+                        label="Precio"
+                        value={optPrice}
+                        onChange={(e)=> setOptPrice(e.target.value)}
+                        type="number"
+                      />
+                      <Button variant="contained" onClick={addOptionToService}>
+                        Agregar opción
+                      </Button>
                     </Box>
                   )}
 
@@ -958,7 +1183,9 @@ export default function PlaceDashboard({ user }) {
             </Stack>
 
             <Box sx={{ mt: 2 }}>
-              <Button variant="contained" onClick={saveGeneral}>Guardar configuración</Button>
+              <Button variant="contained" onClick={saveGeneral}>
+                Guardar configuración
+              </Button>
             </Box>
           </Box>
         )}
@@ -982,7 +1209,9 @@ export default function PlaceDashboard({ user }) {
                 />
               ))}
             </Box>
-            <Button variant="contained" onClick={generateFixedTurns} sx={{ mt:1 }}>Generar turnos fijos</Button>
+            <Button variant="contained" onClick={generateFixedTurns} sx={{ mt:1 }}>
+              Generar turnos fijos
+            </Button>
           </Box>
         )}
 
@@ -1003,7 +1232,9 @@ export default function PlaceDashboard({ user }) {
                 />
               ))}
             </Box>
-            <Button variant="contained" onClick={generateFlexTurns} sx={{ mt:1 }}>Generar disponibilidad flexible</Button>
+            <Button variant="contained" onClick={generateFlexTurns} sx={{ mt:1 }}>
+              Generar disponibilidad flexible
+            </Button>
           </Box>
         )}
 
@@ -1031,7 +1262,9 @@ export default function PlaceDashboard({ user }) {
                 </Grid>
               )}
             </Grid>
-            <Button variant="contained" onClick={publishManualSlot} sx={{ mt:1 }}>Publicar</Button>
+            <Button variant="contained" onClick={publishManualSlot} sx={{ mt:1 }}>
+              Publicar
+            </Button>
           </Box>
         )}
 
@@ -1042,9 +1275,287 @@ export default function PlaceDashboard({ user }) {
               <Grid item xs={12} md={3}><TextField label="Hasta (YYYY-MM-DD)" value={delTo} onChange={(e)=> setDelTo(e.target.value)} fullWidth /></Grid>
             </Grid>
             <Box sx={{ display:"flex", gap:1, mt:1, flexWrap:"wrap" }}>
-              <Button variant="outlined" color="error" startIcon={<DeleteForeverIcon />} onClick={deleteAllTurns}>Borrar todos</Button>
-              <Button variant="contained" color="error" startIcon={<DeleteOutlineIcon />} onClick={deleteTurnsByPeriod}>Borrar por período</Button>
+              <Button variant="outlined" color="error" startIcon={<DeleteForeverIcon />} onClick={deleteAllTurns}>
+                Borrar todos
+              </Button>
+              <Button variant="contained" color="error" startIcon={<DeleteOutlineIcon />} onClick={deleteTurnsByPeriod}>
+                Borrar por período
+              </Button>
             </Box>
+          </Box>
+        )}
+
+        {/* --- ESTADÍSTICAS --- */}
+        {adminTab === 5 && (
+          <Box sx={{ mt: 2 }}>
+            <Grid container spacing={2}>
+              <Grid item xs={12} md={3}>
+                <Card variant="outlined">
+                  <CardContent>
+                    <Typography variant="subtitle2" color="text.secondary">Recaudación (suma precios en reservas)</Typography>
+                    <Typography variant="h5">${(stats.revenue || 0).toLocaleString()}</Typography>
+                  </CardContent>
+                </Card>
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <Card variant="outlined">
+                  <CardContent>
+                    <Typography variant="subtitle2" color="text.secondary">Clientes fieles (2+ reservas completadas)</Typography>
+                    <Typography variant="h5">{stats.loyalUsers || 0}</Typography>
+                  </CardContent>
+                </Card>
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <Card variant="outlined">
+                  <CardContent>
+                    <Typography variant="subtitle2" color="text.secondary">Reservas totales</Typography>
+                    <Typography variant="h5">{stats.totalRes || 0}</Typography>
+                  </CardContent>
+                </Card>
+              </Grid>
+            </Grid>
+
+            <Grid container spacing={2} sx={{ mt: 1 }}>
+              <Grid item xs={12} md={4}>
+                <Card variant="outlined" sx={{ height: 320 }}>
+                  <CardContent sx={{ height: "100%" }}>
+                    <Typography variant="subtitle1" sx={{ mb: 1 }}>Origen de reservas</Typography>
+                    <ResponsiveContainer width="100%" height="85%">
+                      <PieChart>
+                        <Pie data={stats.originArr} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80}>
+                          {stats.originArr.map((entry, idx) => (
+                            <Cell key={`cell-${idx}`} fill={["#8884d8","#82ca9d"][idx % 2]} />
+                          ))}
+                        </Pie>
+                        <RTooltip />
+                        <Legend />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+              </Grid>
+
+              <Grid item xs={12} md={4}>
+                <Card variant="outlined" sx={{ height: 320 }}>
+                  <CardContent sx={{ height: "100%" }}>
+                    <Typography variant="subtitle1" sx={{ mb: 1 }}>Recaudación por servicio</Typography>
+                    <ResponsiveContainer width="100%" height="85%">
+                      <BarChart data={stats.serviceArr}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="serviceName" hide />
+                        <YAxis />
+                        <RTooltip />
+                        <Bar dataKey="recaudacion" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+              </Grid>
+
+              <Grid item xs={12} md={4}>
+                <Card variant="outlined" sx={{ height: 320 }}>
+                  <CardContent sx={{ height: "100%" }}>
+                    <Typography variant="subtitle1" sx={{ mb: 1 }}>Turnos por hora</Typography>
+                    <ResponsiveContainer width="100%" height="85%">
+                      <LineChart data={stats.hourArr}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="hour" />
+                        <YAxis />
+                        <RTooltip />
+                        <Line type="monotone" dataKey="turnos" />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+              </Grid>
+            </Grid>
+          </Box>
+        )}
+
+        {/* --- SUSCRIPCIONES (CRUD BÁSICO + generación de ocurrencias) --- */}
+        {adminTab === 6 && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="h6">Planes de suscripción</Typography>
+
+            <Grid container spacing={2} sx={{ mt: 1 }}>
+              <Grid item xs={12} md={4}>
+                <TextField
+                  label="Título"
+                  fullWidth
+                  value={planForm.title}
+                  onChange={(e)=> setPlanForm(f=>({ ...f, title: e.target.value }))}
+                />
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <TextField
+                  select
+                  label="Tipo"
+                  fullWidth
+                  value={planForm.type}
+                  onChange={(e)=> setPlanForm(f=>({ ...f, type: e.target.value }))}
+                >
+                  <MenuItem value="recurring_slot">Turno recurrente</MenuItem>
+                  <MenuItem value="flat">Acceso (ej: gimnasio)</MenuItem>
+                </TextField>
+              </Grid>
+              <Grid item xs={12} md={2}>
+                <TextField
+                  label="Precio"
+                  type="number"
+                  fullWidth
+                  value={planForm.price}
+                  onChange={(e)=> setPlanForm(f=>({ ...f, price: e.target.value }))}
+                />
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <TextField
+                  select
+                  label="Ciclo de cobro"
+                  fullWidth
+                  value={planForm.billingPeriod}
+                  onChange={(e)=> setPlanForm(f=>({ ...f, billingPeriod: e.target.value }))}
+                >
+                  <MenuItem value="weekly">Semanal</MenuItem>
+                  <MenuItem value="monthly">Mensual</MenuItem>
+                  <MenuItem value="quarterly">Trimestral</MenuItem>
+                </TextField>
+              </Grid>
+
+              {planForm.type === "recurring_slot" && (
+                <>
+                  <Grid item xs={12} md={3}>
+                    <TextField
+                      select
+                      label="Día semana"
+                      fullWidth
+                      value={planForm.weekday}
+                      onChange={(e)=> setPlanForm(f=>({ ...f, weekday: Number(e.target.value) }))}
+                    >
+                      {[
+                        {v:0,l:"Domingo"},{v:1,l:"Lunes"},{v:2,l:"Martes"},{v:3,l:"Miércoles"},
+                        {v:4,l:"Jueves"},{v:5,l:"Viernes"},{v:6,l:"Sábado"}
+                      ].map(opt => <MenuItem key={opt.v} value={opt.v}>{opt.l}</MenuItem>)}
+                    </TextField>
+                  </Grid>
+                  <Grid item xs={12} md={2}>
+                    <TextField
+                      label="Hora (HH:mm)"
+                      fullWidth
+                      value={planForm.time}
+                      onChange={(e)=> setPlanForm(f=>({ ...f, time: e.target.value }))}
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={2}>
+                    <TextField
+                      label="Cada N semanas"
+                      type="number"
+                      fullWidth
+                      value={planForm.frequencyWeeks}
+                      onChange={(e)=> setPlanForm(f=>({ ...f, frequencyWeeks: Number(e.target.value || 1) }))}
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={2}>
+                    <TextField
+                      select
+                      label="Servicio"
+                      fullWidth
+                      value={planForm.serviceId}
+                      onChange={(e)=> setPlanForm(f=>({ ...f, serviceId: e.target.value, optionId: "" }))}
+                    >
+                      <MenuItem value="">(ninguno)</MenuItem>
+                      {(services||[]).map(s => <MenuItem key={s.id} value={s.id}>{s.name}</MenuItem>)}
+                    </TextField>
+                  </Grid>
+                  <Grid item xs={12} md={3}>
+                    <TextField
+                      select
+                      label="Opción"
+                      fullWidth
+                      value={planForm.optionId}
+                      onChange={(e)=> setPlanForm(f=>({ ...f, optionId: e.target.value }))}
+                      disabled={!planForm.serviceId}
+                    >
+                      <MenuItem value="">(ninguna)</MenuItem>
+                      {(services.find(s=>s.id===planForm.serviceId)?.options||[]).map(o =>
+                        <MenuItem key={o.id} value={o.id}>{o.durationMinutes} min · ${o.price}</MenuItem>
+                      )}
+                    </TextField>
+                  </Grid>
+                </>
+              )}
+
+              <Grid item xs={12} md={3}>
+                <TextField
+                  label="Inicio (YYYY-MM-DD)"
+                  fullWidth
+                  value={planForm.startDate}
+                  onChange={(e)=> setPlanForm(f=>({ ...f, startDate: e.target.value }))}
+                />
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <TextField
+                  label="Fin (YYYY-MM-DD)"
+                  fullWidth
+                  value={planForm.endDate}
+                  onChange={(e)=> setPlanForm(f=>({ ...f, endDate: e.target.value }))}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={3} sx={{ display:"flex", alignItems:"center" }}>
+                <Button variant="contained" onClick={createPlan}>Crear plan</Button>
+              </Grid>
+            </Grid>
+
+            <Divider sx={{ my: 2 }} />
+
+            {plans.length === 0 ? (
+              <Typography color="text.secondary">No hay planes creados.</Typography>
+            ) : (
+              <Stack spacing={1.5}>
+                {plans.map(pl => (
+                  <Card key={pl.id} variant="outlined">
+                    <CardContent>
+                      <Box sx={{ display:"flex", justifyContent:"space-between", alignItems:"start", gap:1, flexWrap:"wrap" }}>
+                        <Box>
+                          <Typography variant="h6">{pl.title || "—"}</Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            {pl.type === "recurring_slot"
+                              ? `Recurrente · ${["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"][Number(pl.weekday||1)]} ${pl.time} · cada ${pl.frequencyWeeks} sem`
+                              : "Acceso (sin turnos fijos)"}
+                            {" · "}Precio: ${Number(pl.price||0)} / {pl.billingPeriod || "monthly"}
+                          </Typography>
+                          {(pl.serviceId && services.find(s=>s.id===pl.serviceId)) && (
+                            <Typography variant="body2" color="text.secondary">
+                              Servicio: {services.find(s=>s.id===pl.serviceId)?.name}
+                              {pl.optionId ? ` · Opción: ${(services.find(s=>s.id===pl.serviceId)?.options||[]).find(o=>o.id===pl.optionId)?.durationMinutes} min` : ""}
+                            </Typography>
+                          )}
+                          {(pl.startDate || pl.endDate) && (
+                            <Typography variant="body2" color="text.secondary">
+                              Vigencia: {pl.startDate || "—"} {pl.endDate ? `→ ${pl.endDate}` : ""}
+                            </Typography>
+                          )}
+                        </Box>
+                        <Box sx={{ display:"flex", gap: 1 }}>
+                          <Button color="error" onClick={()=> deletePlan(pl.id)}>Eliminar</Button>
+                        </Box>
+                      </Box>
+                    </CardContent>
+                  </Card>
+                ))}
+              </Stack>
+            )}
+
+            {plans.some(p=>p.type==="recurring_slot") && (
+              <Box sx={{ mt: 2 }}>
+                <Button variant="contained" onClick={generateOccurrencesForSubscriptions}>
+                  Generar ocurrencias para las próximas semanas
+                </Button>
+                <Typography variant="caption" sx={{ ml: 1 }} color="text.secondary">
+                  (se intentará reservar para suscriptores activos en bloques existentes y sin superposición)
+                </Typography>
+              </Box>
+            )}
           </Box>
         )}
       </Box>
@@ -1098,7 +1609,7 @@ export default function PlaceDashboard({ user }) {
                   </TextField>
                 )}
                 <TextField label="Duración (min, si querés forzar)" value={manualDuration} onChange={(e)=> setManualDuration(e.target.value)} type="number" />
-                <Button variant="contained"onClick={() => runWithCooldown(handleAddManualReservation)}>Agregar</Button>
+                <Button variant="contained" onClick={() => runWithCooldown(handleAddManualReservation)}>Agregar</Button>
               </Box>
 
               <Typography variant="subtitle1" sx={{ mt:2 }}>Agregar reserva a usuario existente</Typography>
@@ -1108,14 +1619,16 @@ export default function PlaceDashboard({ user }) {
                   options={clientOptions}
                   autoHighlight
                   getOptionLabel={(opt)=> opt?.label || ""}
-                  filterOptions={(x)=> x} // no filtrar en cliente
+                  filterOptions={(x)=> x}
                   value={clientSelected}
                   onChange={(_, val)=> setClientSelected(val)}
                   inputValue={clientQuery}
                   onInputChange={(_, val)=> { setClientSelected(null); setClientQuery(val); }}
                   renderInput={(params) => <TextField {...params} label="Buscar por email o nombre" placeholder="ej: juan@..." />}
                 />
-                <Button variant="contained" onClick={() => runWithCooldown(handleAddClientByEmail)}>Agregar</Button>
+                <Button variant="contained" onClick={() => runWithCooldown(handleAddClientByEmail)}>
+                  Agregar
+                </Button>
               </Box>
 
               <Divider sx={{ my: 2 }} />
@@ -1125,19 +1638,15 @@ export default function PlaceDashboard({ user }) {
             </>
           )}
         </DialogContent>
-        
         <DialogActions>
           <Button
-      variant="outlined"
-      color="error"
-      startIcon={<DeleteForeverIcon />}
-      onClick={() => runWithCooldown(() => handleCancelAllReservations(dialogTurn))}
-    >
-      Cancelar todas las reservas
-    </Button>
-
-  
-
+            variant="outlined"
+            color="error"
+            startIcon={<DeleteForeverIcon />}
+            onClick={() => runWithCooldown(() => handleCancelAllReservations(dialogTurn))}
+          >
+            Cancelar todas las reservas
+          </Button>
           <Button onClick={()=> setDialogTurn(null)}>Cerrar</Button>
         </DialogActions>
       </Dialog>
