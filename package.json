@@ -10,10 +10,13 @@
     "@mui/icons-material": "^5.14.0",
     "@mui/material": "^5.14.0",
     "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
     "date-fns": "^4.1.0",
+    "express": "^5.1.0",
     "firebase": "^12.3.0",
     "leaflet": "^1.9.4",
     "mercadopago": "^2.9.0",
+    "node-fetch": "^3.3.2",
     "react": "^18.2.0",
     "react-big-calendar": "^1.19.4",
     "react-dom": "^18.2.0",
@@ -38,5 +41,17 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
+  },
+  "description": "1. Clonar repo o copiar archivos\r 2. Ejecutar npm install para instalar dependencias\r 3. Crear proyecto en Firebase y copiar configuración en src/firebase.js\r 4. Crear colecciones en Firestore:\r    - places: documentos con campos { name: string }\r    - turnos: documentos con { userId, placeId, placeName, date, time }\r 5. Configurar reglas de seguridad en Firestore con firestore.rules\r 6. Ejecutar npm start para levantar la app en desarrollo",
+  "main": "server.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/elianumansky/turnit.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/elianumansky/turnit/issues"
   }
 }
