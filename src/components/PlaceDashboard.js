@@ -863,82 +863,131 @@ export default function PlaceDashboard({ user }) {
   const overlaps = (aStart, aEnd, bStart, bEnd) => aStart.getTime() < bEnd.getTime() && bStart.getTime() < aEnd.getTime();
 
   const generateOccurrencesForSubscriptions = async () => {
-    if (!placeId) return;
-    try {
-      let created=0, skipped=0;
-      for (const plan of plans) {
-        if (plan.type !== "recurring_slot") continue;
+  if (!placeId) return;
 
-        // subs activas
-        const subsSnap = await getDocs(collection(db, "places", placeId, "plans", plan.id, "subs"));
-        const activeSubs = subsSnap.docs.map(d=>({ id:d.id, ...d.data() })).filter(s=>s.status==="active");
+  try {
+    let created = 0, skipped = 0;
 
-        for (const sub of activeSubs) {
-          const occs = getNextOccurrences(plan.startDate || yyyymmdd(new Date()), Number(plan.weekday||1), plan.time || "12:00", Number(plan.frequencyWeeks||2), 4);
+    console.log("Iniciando generación de ocurrencias para planes...", plans);
 
-          for (const occ of occs) {
-            const qT = query(
-              collection(db, "turnos"),
-              where("placeId", "==", placeId),
-              where("date", "==", occ.date),
-              where("time", "==", occ.time)
-            );
-            const tSnap = await getDocs(qT);
-            if (tSnap.empty) { skipped++; continue; }
-            const tDoc = tSnap.docs[0];
-            const turn = { id: tDoc.id, ...tDoc.data() };
-            if (Number(turn.slotsAvailable ?? turn.slots ?? 0) <= 0 || turn.status==="canceled") { skipped++; continue; }
+    for (const plan of plans) {
+      if (plan.type !== "recurring_slot") continue;
 
-            const qMineSameDay = query(
-              collection(db, "turnos"),
-              where("reservationUids", "array-contains", sub.userId),
-              where("date", "==", occ.date)
-            );
-            const mineSnap = await getDocs(qMineSameDay);
-            const willStartEnd = computeStartEnd(occ.date, occ.time, turn.durationMinutes || 60);
-            const hasConflict = mineSnap.docs.some(d=> {
-              const td = d.data();
-              const se = computeStartEnd(td.date, td.time, td.durationMinutes || 60);
-              return overlaps(se.start, se.end, willStartEnd.start, willStartEnd.end);
-            });
-            if (hasConflict) { skipped++; continue; }
+      console.log("Procesando plan:", plan.id, plan.title);
 
-            await runTransaction(db, async (tx) => {
-              const ref = doc(db, "turnos", turn.id);
-              const s = await tx.get(ref);
-              if (!s.exists()) throw new Error("Turno inexistente");
-              const data = s.data();
-              const avail = Number(data.slotsAvailable ?? data.slots ?? 0);
-              if (avail <= 0) throw new Error("Sin cupo");
+      // Obtener suscripciones activas
+      const subsSnap = await getDocs(collection(db, "places", placeId, "plans", plan.id, "subs"));
+      const activeSubs = subsSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(s => s.status === "active");
 
-              const reservations = Array.isArray(data.reservations) ? [...data.reservations] : [];
-              if (reservations.some(r => r.uid === sub.userId)) return;
-              reservations.push({
-                uid: sub.userId,
-                name: "Suscriptor",
-                serviceId: plan.serviceId || null,
-                optionId: plan.optionId || null,
-                serviceName: (services.find(sv=>sv.id===plan.serviceId)?.name) || null,
-                durationMinutes: Number(data.durationMinutes || 60),
-                price: 0,
-                meta: { subscriptionPlanId: plan.id }
-              });
-              tx.update(ref, {
-                reservations,
-                reservationUids: [...(data.reservationUids || []), sub.userId],
-                slotsAvailable: avail - 1,
-                status: "available"
-              });
-            });
-            created++;
+      console.log(`Suscripciones activas para plan ${plan.id}:`, activeSubs.length);
+
+      for (const sub of activeSubs) {
+        const occs = getNextOccurrences(
+          plan.startDate || yyyymmdd(new Date()),
+          Number(plan.weekday || 1),
+          plan.time || "12:00",
+          Number(plan.frequencyWeeks || 2),
+          4
+        );
+
+        console.log(`Ocurrencias calculadas para sub ${sub.id}:`, occs);
+
+        for (const occ of occs) {
+          console.log("Verificando turno para fecha y hora:", occ.date, occ.time);
+
+          const qT = query(
+            collection(db, "turnos"),
+            where("placeId", "==", placeId),
+            where("date", "==", occ.date),
+            where("time", "==", occ.time)
+          );
+          const tSnap = await getDocs(qT);
+
+          if (tSnap.empty) { 
+            console.log("No existe turno para esta ocurrencia, se omite."); 
+            skipped++; 
+            continue; 
           }
+
+          const tDoc = tSnap.docs[0];
+          const turn = { id: tDoc.id, ...tDoc.data() };
+
+          if (Number(turn.slotsAvailable ?? turn.slots ?? 0) <= 0 || turn.status === "canceled") { 
+            console.log("Turno sin cupo o cancelado, se omite:", turn); 
+            skipped++; 
+            continue; 
+          }
+
+          // Verificar conflictos del usuario
+          const qMineSameDay = query(
+            collection(db, "turnos"),
+            where("reservationUids", "array-contains", sub.userId),
+            where("date", "==", occ.date)
+          );
+          const mineSnap = await getDocs(qMineSameDay);
+          const willStartEnd = computeStartEnd(occ.date, occ.time, turn.durationMinutes || 60);
+
+          const hasConflict = mineSnap.docs.some(d => {
+            const td = d.data();
+            const se = computeStartEnd(td.date, td.time, td.durationMinutes || 60);
+            return overlaps(se.start, se.end, willStartEnd.start, willStartEnd.end);
+          });
+
+          if (hasConflict) { 
+            console.log("Conflicto de horario para sub:", sub.userId); 
+            skipped++; 
+            continue; 
+          }
+
+          // Reservar el turno
+          await runTransaction(db, async (tx) => {
+            const ref = doc(db, "turnos", turn.id);
+            const s = await tx.get(ref);
+            if (!s.exists()) throw new Error("Turno inexistente");
+
+            const data = s.data();
+            const avail = Number(data.slotsAvailable ?? data.slots ?? 0);
+            if (avail <= 0) throw new Error("Sin cupo");
+
+            const reservations = Array.isArray(data.reservations) ? [...data.reservations] : [];
+            if (reservations.some(r => r.uid === sub.userId)) return;
+
+            reservations.push({
+              uid: sub.userId,
+              name: "Suscriptor",
+              serviceId: plan.serviceId || null,
+              optionId: plan.optionId || null,
+              serviceName: (services.find(sv => sv.id === plan.serviceId)?.name) || null,
+              durationMinutes: Number(data.durationMinutes || 60),
+              price: 0,
+              meta: { subscriptionPlanId: plan.id }
+            });
+
+            tx.update(ref, {
+              reservations,
+              reservationUids: [...(data.reservationUids || []), sub.userId],
+              slotsAvailable: avail - 1,
+              status: "available"
+            });
+
+            console.log("Turno reservado:", turn.id, "para usuario:", sub.userId);
+          });
+
+          created++;
         }
       }
-      setToast({ open: true, sev: "success", msg: `Ocurrencias generadas. Hechas: ${created}, omitidas: ${skipped}` });
-    } catch (e) {
-      setToast({ open: true, sev: "error", msg: e.message || "No se pudo generar." });
     }
-  };
+
+    console.log(`Generación de ocurrencias finalizada. Hechas: ${created}, omitidas: ${skipped}`);
+    setToast({ open: true, sev: "success", msg: `Ocurrencias generadas. Hechas: ${created}, omitidas: ${skipped}` });
+  } catch (e) {
+    console.error("Error generando ocurrencias:", e);
+    setToast({ open: true, sev: "error", msg: e.message || "No se pudo generar." });
+  }
+};
+
 
   // ---- Estadísticas (a partir de turns) ----
   const stats = useMemo(() => {
